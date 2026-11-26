@@ -2178,21 +2178,21 @@
       factorDrift: 0.05, factorSd: 1.8, xNoise: 0.2,
       glitchProb: 0, glitchAmp: 20, breakAt: null, breakDrift: 0
     }, opts || {});
-    const rng = mulberry32(o.seed);
+    const rng = mulberry32(o.seed), gauss = makeGauss(rng);
     const a = new Array(o.n), b = new Array(o.n);
     const aExec = new Array(o.n), bExec = new Array(o.n);
     const trueBeta = new Array(o.n), trueAlpha = new Array(o.n), isGlitch = new Array(o.n).fill(false);
     let f = 100, u = 0, prevStep = 0;
     for (let t = 0; t < o.n; t++) {
-      f = Math.max(25, f + o.factorDrift + randn(rng) * o.factorSd);
+      f = Math.max(25, f + o.factorDrift + gauss() * o.factorSd);
       const bt = o.beta0 + (o.beta1 - o.beta0) * (t / (o.n - 1));
       const broken = o.breakAt !== null && t >= o.breakAt;
       const al = o.alpha0;
-      const eps = randn(rng) * o.ouSd + o.trendMix * prevStep;
+      const eps = gauss() * o.ouSd + o.trendMix * prevStep;
       u = (broken ? 1.0 : o.ouRho) * u + (broken ? o.breakDrift : 0) + eps;
       prevStep = eps;
 
-      const bxExec = f + randn(rng) * o.xNoise;
+      const bxExec = f + gauss() * o.xNoise;
       const ayExec = al + bt * f + u;
       let bxFeed = bxExec, ayFeed = ayExec;
       if (o.glitchProb > 0 && t > 35 && rng() < o.glitchProb) {

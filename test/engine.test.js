@@ -645,7 +645,7 @@ for (const sc of E.MOEX_SCENARIOS) {
   const cleanX = [10, 20, 30, 40, 50, 60, 70, 80];
   const cleanY = cleanX.map((v) => 5 + 1.5 * v);
   const dirtyY = cleanY.slice();
-  dirtyY[3] += 250;
+  dirtyY[7] += 250;
   close(E.theilSen(cleanX, dirtyY).k, 1.5, 1e-9);
   assert.ok(Math.abs(E.ols(cleanX, dirtyY).k - 1.5) > 0.4);
 
