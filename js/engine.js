@@ -2713,7 +2713,646 @@
     };
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  /* ===== Переключение режимов (HMM) и копула-зависимость с Mispricing Index (#62, #49) ===== */
+
+  function normInv(p) {
+    const q = Math.max(1e-6, Math.min(1 - 1e-6, p));
+    const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.3577518672690, -30.66479806614716, 2.506628277459239];
+    const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+    const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+    const pLow = 0.02425, pHigh = 1 - pLow;
+    if (q < pLow) {
+      const r = Math.sqrt(-2 * Math.log(q));
+      return (((((c[0] * r + c[1]) * r + c[2]) * r + c[3]) * r + c[4]) * r + c[5]) /
+             ((((d[0] * r + d[1]) * r + d[2]) * r + d[3]) * r + 1);
+    }
+    if (q <= pHigh) {
+      const r = q - 0.5, s = r * r;
+      return (((((a[0] * s + a[1]) * s + a[2]) * s + a[3]) * s + a[4]) * s + a[5]) * r /
+             (((((b[0] * s + b[1]) * s + b[2]) * s + b[3]) * s + b[4]) * s + 1);
+    }
+    const r = Math.sqrt(-2 * Math.log(1 - q));
+    return -(((((c[0] * r + c[1]) * r + c[2]) * r + c[3]) * r + c[4]) * r + c[5]) /
+             ((((d[0] * r + d[1]) * r + d[2]) * r + d[3]) * r + 1);
+  }
+
+  function t2Inv(p) {
+    const q = Math.max(1e-5, Math.min(1 - 5e-6, p));
+    return 2 * (q - 0.5) / Math.sqrt(2 * q * (1 - q));
+  }
+
+  function t3Cdf(x) {
+    const s3 = Math.sqrt(3);
+    return 0.5 + (1 / Math.PI) * ((x / (s3 * (1 + x * x / 3))) + Math.atan(x / s3));
+  }
+
+  const HMM_DEFAULT_TRANS = [
+    [0.93, 0.04, 0.03],
+    [0.14, 0.83, 0.03],
+    [0.04, 0.04, 0.92]
+  ];
+
+  function gaussPdf(x, mu, sig) {
+    const s = Math.max(1e-4, sig);
+    const z = (x - mu) / s;
+    return Math.exp(-0.5 * z * z) / (2.5066282746310002 * s);
+  }
+
+  function hmmEntropy(probs) {
+    let h = 0;
+    for (let k = 0; k < 3; k++) {
+      const p = Math.max(1e-9, probs[k]);
+      h -= p * Math.log(p);
+    }
+    return Math.max(0, Math.min(1, h / Math.log(3)));
+  }
+
+  /* Один каузальный шаг фильтра Гамильтона (3 режима: 0=возврат, 1=шторм, 2=распад/дрейф). */
+  function hmmStep(prevProbs, dx, devPrev, recentDrift, dirRatio, baseSig, trans) {
+    const P = trans || HMM_DEFAULT_TRANS;
+    const s0 = Math.max(0.25, baseSig * 1.05);
+    const s1 = Math.max(0.65, baseSig * 3.25);
+    const s2 = Math.max(0.35, baseSig * 1.20);
+
+    const pred = [0, 0, 0];
+    for (let j = 0; j < 3; j++) {
+      pred[j] = prevProbs[0] * P[0][j] + prevProbs[1] * P[1][j] + prevProbs[2] * P[2][j];
+    }
+
+    // Режим 0 (возврат): пружина тянет назад (-0.25 * devPrev), умеренный шум s0
+    // Режим 1 (шторм): двусторонняя болтанка широкой амплитуды s1 (низкая однонаправленность dirRatio)
+    // Режим 2 (распад/дрейф): однонаправленный уход от равновесия (высокий dirRatio и выход за коридор стационарности)
+    const mu0 = -0.25 * devPrev;
+    const mu1 = 0;
+    const signDrift = (recentDrift !== 0 ? recentDrift : devPrev) >= 0 ? 1 : -1;
+    const mu2 = signDrift * Math.max(0.42 * baseSig, Math.abs(recentDrift));
+
+    const stretch = Math.abs(devPrev) / Math.max(0.5, 4.0 * baseSig);
+    const isOneWay = Math.max(0, (dirRatio || 0) - 0.38);
+
+    const l0 = gaussPdf(dx, mu0, s0) * (stretch > 1.15 ? Math.exp(-1.1 * (stretch - 1.15) * (stretch - 1.15)) : 1);
+    const l1 = gaussPdf(dx, mu1, s1) * (1 - 0.45 * isOneWay);
+    const l2 = gaussPdf(dx, mu2, s2) * Math.exp(1.25 * isOneWay + (stretch > 1.05 ? 0.65 * Math.min(2, stretch - 1.05) : -0.35));
+
+    const raw = [pred[0] * l0, pred[1] * l1, pred[2] * l2];
+    const norm = raw[0] + raw[1] + raw[2] || 1e-12;
+    const post = [raw[0] / norm, raw[1] / norm, raw[2] / norm];
+    const entropy = hmmEntropy(post);
+    return {
+      pred,
+      lik: [l0, l1, l2],
+      post,
+      entropy,
+      confidence: 1 - entropy,
+      means: [mu0, mu1, mu2],
+      sigmas: [s0, s1, s2]
+    };
+  }
+
+  function regimeGate(probs, opts) {
+    const o = Object.assign({ breakCut: 0.42, exitBreakCut: 0.58, stormCut: 0.38, uncertCut: 0.84 }, opts || {});
+    const pRev = probs[0], pStorm = probs[1], pBreak = probs[2];
+    const entropy = hmmEntropy(probs);
+    const conf = 1 - entropy;
+    if (pBreak >= o.breakCut) {
+      return {
+        state: 'blocked_break',
+        sizeMult: 0,
+        bandMult: 1.8,
+        forceExit: pBreak >= o.exitBreakCut,
+        entropy,
+        confidence: conf,
+        label: 'Распад связи — запрет входа'
+      };
+    }
+    if (entropy >= o.uncertCut) {
+      return {
+        state: 'paused_uncertain',
+        sizeMult: 0,
+        bandMult: 1.5,
+        forceExit: false,
+        entropy,
+        confidence: conf,
+        label: 'Серая зона 50/50 — пауза'
+      };
+    }
+    if (pStorm >= o.stormCut) {
+      return {
+        state: 'storm_cautious',
+        sizeMult: 0.25,
+        bandMult: 1.55,
+        forceExit: false,
+        entropy,
+        confidence: conf,
+        label: 'Волатильный шторм — четверть лота'
+      };
+    }
+    // В уверенном возвратном режиме (pRev >= 0.62) работаем полным лотом 1.0, при сомнениях плавно снижаем
+    const rawSize = pRev >= 0.62 && entropy < 0.72 ? 1.0 : Math.min(1.0, Math.max(0.5, pRev / 0.62));
+    return {
+      state: 'active_rev',
+      sizeMult: Math.round(rawSize * 20) / 20,
+      bandMult: 1.0,
+      forceExit: false,
+      entropy,
+      confidence: conf,
+      label: 'Спокойный возврат — рабочий вход'
+    };
+  }
+
+  function hmmFilter(series, opts) {
+    const o = Object.assign({ anchorWin: 55, driftWin: 12, trans: HMM_DEFAULT_TRANS }, opts || {});
+    const len = series.length;
+    const pRev = new Array(len).fill(0.82);
+    const pStorm = new Array(len).fill(0.11);
+    const pBreak = new Array(len).fill(0.07);
+    const entropy = new Array(len).fill(hmmEntropy([0.82, 0.11, 0.07]));
+    const gates = new Array(len).fill(null);
+
+    let cur = [0.82, 0.11, 0.07];
+    gates[0] = regimeGate(cur, o);
+
+    let calmSig = 1.0;
+    for (let t = 1; t < len; t++) {
+      const aEnd = Math.max(1, t - 12);
+      const aStart = Math.max(0, aEnd - o.anchorWin);
+      const anchorSlice = series.slice(aStart, aEnd);
+      const anchorMean = anchorSlice.length ? median(anchorSlice) : series[0];
+
+      const dStart = Math.max(1, t - o.anchorWin);
+      const absDiffs = [];
+      for (let k = dStart; k < t; k++) absDiffs.push(Math.abs(series[k] - series[k - 1]));
+      if (absDiffs.length >= 8) {
+        const medSig = Math.max(0.35, median(absDiffs) * MAD_SCALE * 0.90);
+        calmSig = t < 25 ? medSig : (0.95 * calmSig + 0.05 * Math.min(calmSig * 1.35, medSig));
+      }
+
+      const j0 = Math.max(1, t - o.driftWin);
+      let drSum = 0, absSum = 0, drCnt = 0;
+      for (let k = j0; k <= t; k++) {
+        const stepD = series[k] - series[k - 1];
+        drSum += stepD;
+        absSum += Math.abs(stepD);
+        drCnt++;
+      }
+      const recentDrift = drCnt > 0 ? drSum / drCnt : 0;
+      const dirRatio = absSum > 1e-6 ? Math.abs(drSum) / absSum : 0;
+
+      const dx = series[t] - series[t - 1];
+      const devPrev = series[t - 1] - anchorMean;
+      const step = hmmStep(cur, dx, devPrev, recentDrift, dirRatio, calmSig, o.trans);
+      cur = step.post;
+      pRev[t] = cur[0];
+      pStorm[t] = cur[1];
+      pBreak[t] = cur[2];
+      entropy[t] = step.entropy;
+      gates[t] = regimeGate(cur, o);
+    }
+    return { pRev, pStorm, pBreak, entropy, gates };
+  }
+
+  function copulaParamFromTau(family, tauRaw) {
+    const tau = Math.max(0.05, Math.min(0.88, tauRaw));
+    if (family === 'clayton') return (2 * tau) / (1 - tau);
+    if (family === 'gumbel') return 1 / (1 - tau);
+    return Math.sin(0.5 * Math.PI * tau);
+  }
+
+  function copulaH(uRaw, vRaw, family, param) {
+    const u = Math.max(0.002, Math.min(0.998, uRaw));
+    const v = Math.max(0.002, Math.min(0.998, vRaw));
+    if (family === 'clayton') {
+      const th = Math.max(0.05, param);
+      const sum = Math.pow(u, -th) + Math.pow(v, -th) - 1;
+      if (sum <= 0) return 0.5;
+      return Math.max(0.001, Math.min(0.999, Math.pow(v, -(th + 1)) * Math.pow(sum, -(1 + 1 / th))));
+    }
+    if (family === 'gumbel') {
+      const th = Math.max(1.01, param);
+      const x = -Math.log(u), y = -Math.log(v);
+      const s = Math.pow(x, th) + Math.pow(y, th);
+      const A = Math.pow(s, 1 / th);
+      const C = Math.exp(-A);
+      const h = C * Math.pow(s, 1 / th - 1) * Math.pow(y, th - 1) / v;
+      return Math.max(0.001, Math.min(0.999, h));
+    }
+    if (family === 'student') {
+      const rho = Math.max(-0.96, Math.min(0.96, param));
+      const tu = t2Inv(u), tv = t2Inv(v);
+      const scale = Math.sqrt(((2 + tv * tv) * (1 - rho * rho)) / 3);
+      return Math.max(0.001, Math.min(0.999, t3Cdf((tu - rho * tv) / Math.max(1e-6, scale))));
+    }
+    const rho = Math.max(-0.96, Math.min(0.96, param));
+    const zu = normInv(u), zv = normInv(v);
+    return Math.max(0.001, Math.min(0.999, normCdf((zu - rho * zv) / Math.sqrt(1 - rho * rho))));
+  }
+
+  function copulaTailDep(family, param) {
+    if (family === 'clayton') {
+      const th = Math.max(0.05, param);
+      return { lower: Math.pow(2, -1 / th), upper: 0 };
+    }
+    if (family === 'gumbel') {
+      const th = Math.max(1.01, param);
+      return { lower: 0, upper: 2 - Math.pow(2, 1 / th) };
+    }
+    if (family === 'student') {
+      const rho = Math.max(-0.96, Math.min(0.96, param));
+      const lam = 2 * t3Cdf(-Math.sqrt(3 * (1 - rho) / (1 + rho)));
+      return { lower: lam, upper: lam };
+    }
+    return { lower: 0, upper: 0 };
+  }
+
+  function copulaSample2D(seed, count, family, tau) {
+    const rng = mulberry32(seed);
+    const param = copulaParamFromTau(family, tau);
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const u = 0.004 + 0.992 * rng();
+      const w = 0.004 + 0.992 * rng();
+      let uOut = u, vOut = w;
+      if (family === 'clayton') {
+        const th = Math.max(0.05, param);
+        vOut = Math.pow((Math.pow(w, -th / (1 + th)) - 1) * Math.pow(u, -th) + 1, -1 / th);
+        vOut = Math.max(0.002, Math.min(0.998, vOut));
+      } else if (family === 'gumbel') {
+        let lo = 0.002, hi = 0.998;
+        for (let it = 0; it < 14; it++) {
+          const mid = 0.5 * (lo + hi);
+          if (copulaH(mid, u, 'gumbel', param) < w) lo = mid; else hi = mid;
+        }
+        vOut = 0.5 * (lo + hi);
+      } else if (family === 'student') {
+        const q = Math.max(1e-4, rng());
+        const scale = Math.sqrt(2 / (-2 * Math.log(q)));
+        const z1 = normInv(u), z2 = param * z1 + Math.sqrt(1 - param * param) * normInv(w);
+        const t1 = scale * z1, t2 = scale * z2;
+        uOut = Math.max(0.002, Math.min(0.998, 0.5 + t1 / (2 * Math.sqrt(2 + t1 * t1))));
+        vOut = Math.max(0.002, Math.min(0.998, 0.5 + t2 / (2 * Math.sqrt(2 + t2 * t2))));
+      } else {
+        const z1 = normInv(u), z2 = param * z1 + Math.sqrt(1 - param * param) * normInv(w);
+        vOut = Math.max(0.002, Math.min(0.998, normCdf(z2)));
+      }
+      pts.push({ u: uOut, v: vOut, x: normInv(uOut), y: normInv(vOut) });
+    }
+    return { family, tau, param, tails: copulaTailDep(family, param), pts };
+  }
+
+  function fastWindowTau(subA, subB) {
+    const n = subA.length;
+    if (n < 6) return 0.5;
+    const idxA = new Array(n), idxB = new Array(n);
+    for (let i = 0; i < n; i++) { idxA[i] = i; idxB[i] = i; }
+    idxA.sort((i, j) => subA[i] - subA[j]);
+    idxB.sort((i, j) => subB[i] - subB[j]);
+    const rA = new Array(n), rB = new Array(n);
+    for (let r = 0; r < n; r++) { rA[idxA[r]] = r; rB[idxB[r]] = r; }
+    let d2 = 0;
+    for (let i = 0; i < n; i++) { const d = rA[i] - rB[i]; d2 += d * d; }
+    const rhoS = 1 - (6 * d2) / (n * (n * n - 1));
+    return Math.max(0.08, Math.min(0.86, (2 / Math.PI) * Math.asin(Math.max(-0.98, Math.min(0.98, rhoS)))));
+  }
+
+  function mispricingIndex(legA, legB, opts) {
+    const o = Object.assign({ win: 60, family: 'student', decay: 0.72 }, opts || {});
+    const len = legA.length;
+    const uArr = new Array(len).fill(0.5);
+    const vArr = new Array(len).fill(0.5);
+    const h12 = new Array(len).fill(0.5);
+    const h21 = new Array(len).fill(0.5);
+    const tauArr = new Array(len).fill(0.55);
+    const rankSpread = new Array(len).fill(0.5);
+    const mi = new Array(len).fill(0);
+
+    const dA = new Array(len).fill(0), dB = new Array(len).fill(0);
+    for (let t = 1; t < len; t++) {
+      dA[t] = legA[t] - legA[t - 1];
+      dB[t] = legB[t] - legB[t - 1];
+    }
+
+    let cumStep = 0, lastTau = 0.55;
+    for (let t = 1; t < len; t++) {
+      const i0 = Math.max(1, t - o.win);
+      const cnt = t - i0;
+      if (cnt < 10) continue;
+
+      let lessA = 0, lessB = 0, lessSp = 0;
+      const spNow = legA[t] - legB[t];
+      for (let k = i0; k < t; k++) {
+        if (dA[k] < dA[t]) lessA++; else if (dA[k] === dA[t]) lessA += 0.5;
+        if (dB[k] < dB[t]) lessB++; else if (dB[k] === dB[t]) lessB += 0.5;
+        const spK = legA[k] - legB[k];
+        if (spK < spNow) lessSp++; else if (spK === spNow) lessSp += 0.5;
+      }
+      const u = Math.max(0.015, Math.min(0.985, (lessA + 0.5) / (cnt + 1)));
+      const v = Math.max(0.015, Math.min(0.985, (lessB + 0.5) / (cnt + 1)));
+      const rSp = Math.max(0.015, Math.min(0.985, (lessSp + 0.5) / (cnt + 1)));
+
+      if (t % 3 === 0 || t < i0 + 14) {
+        lastTau = fastWindowTau(dA.slice(i0, t), dB.slice(i0, t));
+      }
+      const param = copulaParamFromTau(o.family, lastTau);
+      const p12 = copulaH(u, v, o.family, param);
+      const p21 = copulaH(v, u, o.family, param);
+
+      const stepMis = (p12 - 0.5) - (p21 - 0.5);
+      cumStep = o.decay * cumStep + stepMis;
+      const rankZ = normInv(rSp);
+
+      // Шкала сопоставима с z-score (порог входа ±1,75): ранговый уровень + условный импульс копулы
+      const rawMi = 0.76 * rankZ + 0.95 * cumStep;
+      uArr[t] = u; vArr[t] = v;
+      h12[t] = p12; h21[t] = p21;
+      tauArr[t] = lastTau;
+      rankSpread[t] = rSp;
+      mi[t] = Math.max(-3.6, Math.min(3.6, rawMi));
+    }
+    return { u: uArr, v: vArr, h12, h21, tau: tauArr, rankSpread, mi };
+  }
+
+  const REGIME_SCENARIOS = [
+    {
+      id: 'quiet_break',
+      name: 'Тихий распад связи без всплеска шума',
+      note: 'До 145-го дня пара образцово возвращается к среднему, а затем без грома и всплеска волатильности уходит в снос: ни обычный Z-score, ни чистая копула без HMM не видят поломки.',
+      opts: { mode: 'quiet_break', cost: 0.38, copulaFamily: 'student', copulaWin: 60 }
+    },
+    {
+      id: 'storm_grey',
+      name: 'Чередование штиля, дорогих бурь и серых зон 50/50',
+      note: 'В штормовых эпизодах стакан пустеет (издержки ×4,5) и уровень спреда блуждает со сдвигом плато: торговля полным объёмом в бурю и в серых зонах 50/50 сжигает счёт.',
+      opts: { mode: 'storm_grey', cost: 0.50, copulaFamily: 'student', copulaWin: 60 }
+    },
+    {
+      id: 'clayton_tails',
+      name: 'Совместные обвалы в нижнем хвосте и тяжёлые шпили',
+      note: 'Ноги сцеплены копулой Клейтона в обвалах, а редкие экстремальные шпили раздувают линейное σ на месяцы вперёд, ослепляя обычный Z-score на рабочих расхождениях.',
+      opts: { mode: 'clayton_tails', cost: 0.35, copulaFamily: 'clayton', copulaWin: 65 }
+    },
+    {
+      id: 'short_sample_v3',
+      name: 'Короткая шумная выборка (урок осторожности v3)',
+      note: 'Окно калибровки копулы сжато до W = 12 дней при широком стакане (c = 1,15 п.) и микрошуме ног: тонкая хвостовая модель переторговывает шум и уступает простому HMM-гейту.',
+      opts: { mode: 'short_sample_v3', cost: 1.15, copulaFamily: 'gumbel', copulaWin: 12 }
+    }
+  ];
+
+  function genRegime(opts) {
+    const o = Object.assign({
+      seed: 7, len: 320, mode: 'quiet_break', cost: 0.45, copulaFamily: 'student', copulaWin: 60
+    }, opts || {});
+    const rng = mulberry32(o.seed);
+    const randn = () => {
+      const u1 = Math.max(1e-7, rng()), u2 = rng();
+      return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    };
+
+    const legA = new Array(o.len).fill(100);
+    const legB = new Array(o.len).fill(100);
+    const spread = new Array(o.len).fill(0);
+    const execSpread = new Array(o.len).fill(0);
+    const trueState = new Array(o.len).fill(0); // 0=rev, 1=storm, 2=break
+
+    let b = 100, sp = 0, anchor = 0, st = 0;
+    for (let t = 1; t < o.len; t++) {
+      const prevSt = st;
+      if (o.mode === 'quiet_break') {
+        st = t < 145 ? 0 : 2;
+      } else if (o.mode === 'storm_grey') {
+        if ((t >= 85 && t <= 115) || (t >= 195 && t <= 230)) st = 1;
+        else if (t >= 275 && t <= 302) st = 2;
+        else st = 0;
+      } else if (o.mode === 'clayton_tails') {
+        st = t < 245 ? 0 : 2;
+      } else {
+        st = ((t >= 105 && t <= 128) || (t >= 225 && t <= 248)) ? 1 : 0;
+      }
+      trueState[t] = st;
+
+      if (o.mode === 'clayton_tails') {
+        const u1 = 0.004 + 0.992 * rng(), w = 0.004 + 0.992 * rng();
+        const th = 2.9;
+        const v1 = Math.max(0.002, Math.min(0.998, Math.pow((Math.pow(w, -th / (1 + th)) - 1) * Math.pow(u1, -th) + 1, -1 / th)));
+        b += normInv(v1);
+        if (st === 0) {
+          const innov = (normInv(u1) - normInv(v1)) * 1.15;
+          sp = 0.66 * sp + innov;
+        } else {
+          sp = sp + (o.seed % 2 === 0 ? 0.62 : -0.62) + randn() * 0.95;
+        }
+        // Редкие неликвидные тени в стакане раздувают обычное std на 45 баров вперёд, но не ломают ранговый MI;
+        // для фильтра режимов одиночная тень на 1 бар отличается от затяжного шторма.
+        const fatShadow = (rng() < 0.065 && st === 0 && (t < 3 || spread[t - 1] === execSpread[t - 1])) ? (rng() < 0.5 ? 12.5 : -12.5) : 0;
+        execSpread[t] = sp;
+        spread[t] = sp + fatShadow;
+        legB[t] = b;
+        legA[t] = b + spread[t];
+      } else if (o.mode === 'storm_grey') {
+        b += randn() * (st === 1 ? 2.2 : 1.0);
+        if (prevSt !== 0 && st === 0) anchor = sp;
+        if (st === 0) {
+          sp = anchor + 0.64 * (sp - anchor) + randn() * 1.25;
+        } else if (st === 1) {
+          // В бурю возвратная пружина выключается (блуждание с выносом стопов в пустом стакане ×5.5)
+          sp = sp + randn() * 3.6;
+        } else {
+          sp = sp + (o.seed % 2 === 0 ? 0.66 : -0.66) + randn() * 1.0;
+        }
+        execSpread[t] = sp;
+        spread[t] = sp;
+        legB[t] = b;
+        legA[t] = b + sp;
+      } else if (o.mode === 'short_sample_v3') {
+        b += randn();
+        if (prevSt !== 0 && st === 0) anchor = sp;
+        if (st === 0) {
+          sp = anchor + 0.66 * (sp - anchor) + randn() * 1.25;
+        } else {
+          sp = sp + randn() * 3.4;
+        }
+        const jitter = (rng() < 0.38 ? -3.5 : 1.2) * randn();
+        execSpread[t] = sp;
+        spread[t] = sp;
+        legB[t] = b + jitter;
+        legA[t] = b + jitter + sp;
+      } else {
+        b += randn();
+        if (st === 0) {
+          sp = 0.72 * sp + randn() * 1.05;
+        } else {
+          const driftStep = (o.seed % 2 === 0 ? 1 : -1) * 0.56;
+          sp = sp + driftStep + randn() * 0.90;
+        }
+        execSpread[t] = sp;
+        spread[t] = sp;
+        legB[t] = b;
+        legA[t] = b + sp;
+      }
+    }
+    return { legA, legB, spread, execSpread, trueState, opts: o };
+  }
+
+  function genRegimeScenario(seed, scen) {
+    const s = scen || REGIME_SCENARIOS[0];
+    return genRegime(Object.assign({ seed }, s.opts));
+  }
+
+  function hmmCausalSeries(spread) {
+    const out = new Array(spread.length);
+    out[0] = spread[0];
+    for (let t = 1; t < spread.length; t++) {
+      const jump = spread[t] - out[t - 1];
+      out[t] = Math.abs(jump) > 8.5 ? out[t - 1] + Math.sign(jump) * 2.2 : spread[t];
+    }
+    return out;
+  }
+
+  function prepareRegimeFeatures(rg, n) {
+    return {
+      st: rolling(rg.spread, n),
+      hmm: hmmFilter(hmmCausalSeries(rg.spread), { anchorWin: n }),
+      cop: mispricingIndex(rg.legA, rg.legB, {
+        win: rg.opts.copulaWin || 60,
+        family: rg.opts.copulaFamily || 'student'
+      })
+    };
+  }
+
+  function backtestRegimeCopula(rg, params) {
+    const p = Object.assign({
+      n: 45, entryZ: 1.75, exitZ: 0.28, entryMi: 1.75, exitMi: 0.28,
+      stopZ: 4.2, maxBars: 26, mode: 'hmm_copula', precomputed: null
+    }, params || {});
+
+    const len = rg.spread.length;
+    const baseCost = rg.opts.cost;
+    const feat = p.precomputed || prepareRegimeFeatures(rg, p.n);
+    const st = feat.st, hmm = feat.hmm, cop = feat.cop;
+
+    const useHmm = (p.mode === 'hmm_gate' || p.mode === 'hmm_copula');
+    const useCop = (p.mode === 'copula_only' || p.mode === 'hmm_copula');
+
+    const pos = new Array(len).fill(0);
+    const sizeArr = new Array(len).fill(0);
+    const equity = new Array(len).fill(0);
+    const signalArr = new Array(len).fill(null);
+    const trades = [];
+
+    let curDir = 0, curSize = 0, entryIdx = -1, entryExec = 0, entrySig = 0, entryFee = 0, realized = 0;
+
+    for (let t = 0; t < len; t++) {
+      const z = st.z[t];
+      const mi = cop.mi[t];
+      const sig = useCop ? mi : z;
+      signalArr[t] = sig;
+
+      const inStorm = rg.trueState[t] === 1;
+      const halfCost = 0.5 * baseCost * (inStorm ? 5.5 : 1.0);
+      const gate = hmm.gates[t];
+
+      if (z === null || t < p.n) {
+        equity[t] = realized;
+        continue;
+      }
+
+      if (curDir !== 0) {
+        const held = t - entryIdx;
+        const exThr = useCop ? p.exitMi : p.exitZ;
+        const hitTarget = (curDir === 1 && sig >= -exThr) || (curDir === -1 && sig <= exThr);
+        const hitStop = !useCop && Math.abs(z) >= p.stopZ;
+        const hitCopStop = useCop && Math.abs(rg.execSpread[t] - entryExec) >= 4.2 * Math.max(0.8, st.std[t] || 1);
+        const hitTime = held >= p.maxBars;
+        const hitRegime = useHmm && (gate.forceExit || (gate.state === 'storm_cautious' && held >= 4 && curDir * (rg.execSpread[t] - entryExec) < -1.5));
+
+        if (hitTarget || hitStop || hitCopStop || hitTime || hitRegime) {
+          const exitFee = curSize * halfCost;
+          const gross = curDir * curSize * (rg.execSpread[t] - entryExec);
+          const totCost = entryFee + exitFee;
+          const net = gross - totCost;
+          realized += net;
+          trades.push({
+            entryIdx, exitIdx: t, bars: held, dir: curDir, size: curSize,
+            entrySig, exitSig: sig, gross, cost: totCost, net,
+            reason: hitRegime ? 'stop' : (hitTarget ? 'target' : ((hitStop || hitCopStop) ? 'stop' : 'time')),
+            regimeNote: hitRegime ? 'защита HMM' : gate.label
+          });
+          curDir = 0; curSize = 0; entryIdx = -1;
+        }
+      }
+
+      if (curDir === 0) {
+        const sizeMult = useHmm ? gate.sizeMult : 1.0;
+        const bandMult = useHmm ? gate.bandMult : 1.0;
+        const enThr = (useCop ? p.entryMi : p.entryZ) * bandMult;
+        const singleBarJump = Math.abs(rg.spread[t] - rg.spread[t - 1]);
+        const shadowGuard = useCop && singleBarJump > 6.5;
+        if (sizeMult > 0 && !shadowGuard && (useCop || Math.abs(z) < p.stopZ)) {
+          if (sig >= enThr) {
+            curDir = -1; curSize = sizeMult; entryIdx = t;
+            entryExec = rg.execSpread[t]; entrySig = sig; entryFee = curSize * halfCost;
+          } else if (sig <= -enThr) {
+            curDir = 1; curSize = sizeMult; entryIdx = t;
+            entryExec = rg.execSpread[t]; entrySig = sig; entryFee = curSize * halfCost;
+          }
+        }
+      }
+
+      pos[t] = curDir * curSize;
+      sizeArr[t] = curSize;
+      const unreal = curDir !== 0 ? (curDir * curSize * (rg.execSpread[t] - entryExec) - entryFee) : 0;
+      equity[t] = realized + unreal;
+    }
+
+    if (curDir !== 0) {
+      const last = len - 1;
+      const exitFee = curSize * 0.5 * baseCost * (rg.trueState[last] === 1 ? 4.5 : 1.0);
+      const gross = curDir * curSize * (rg.execSpread[last] - entryExec);
+      const totCost = entryFee + exitFee;
+      const net = gross - totCost;
+      realized += net;
+      trades.push({
+        entryIdx, exitIdx: last, bars: last - entryIdx, dir: curDir, size: curSize,
+        entrySig, exitSig: signalArr[last], gross, cost: totCost, net, reason: 'end', regimeNote: 'конец ряда'
+      });
+      pos[last] = 0; equity[last] = realized;
+    }
+
+    const m = metrics(trades, equity, pos);
+    return {
+      params: p, trades, equity, pos, sizeArr, signalArr,
+      z: st.z, mean: st.mean, std: st.std, hmm, copula: cop, metrics: m
+    };
+  }
+
+  function explainRegimeCopula(rg, n, t) {
+    if (t < n) return null;
+    const subSp = rg.spread.slice(0, t + 1);
+    const subA = rg.legA.slice(0, t + 1);
+    const subB = rg.legB.slice(0, t + 1);
+    const exZ = explainBar(subSp, n, t);
+    const hmm = hmmFilter(hmmCausalSeries(subSp), { anchorWin: n });
+    const cop = mispricingIndex(subA, subB, {
+      win: rg.opts.copulaWin || 60,
+      family: rg.opts.copulaFamily || 'student'
+    });
+    const fam = rg.opts.copulaFamily || 'student';
+    const param = copulaParamFromTau(fam, cop.tau[t]);
+    const tails = copulaTailDep(fam, param);
+    return {
+      t, spreadVal: rg.spread[t], execVal: rg.execSpread[t], trueState: rg.trueState[t],
+      z: exZ.z, mean: exZ.mean, std: exZ.std,
+      probs: [hmm.pRev[t], hmm.pStorm[t], hmm.pBreak[t]],
+      entropy: hmm.entropy[t], confidence: 1 - hmm.entropy[t],
+      gate: hmm.gates[t],
+      u: cop.u[t], v: cop.v[t], h12: cop.h12[t], h21: cop.h21[t],
+      tau: cop.tau[t], family: fam, param, tails, mi: cop.mi[t], rankSpread: cop.rankSpread[t]
+    };
+  }
+
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -756,4 +756,79 @@ for (const sc of E.MOEX_SCENARIOS) {
   });
 }
 
+// 42. Математика HMM-режимов (фильтр Гамильтона, энтропия неуверенности) и копул (хвостовая зависимость, dC/dv)
+{
+  // Проверка обратной нормальной функции и t-распределения
+  for (const z of [-2.3, -1.1, 0, 0.85, 2.1]) {
+    close(E.normInv(E.normCdf(z)), z, 1e-5);
+  }
+  close(E.t2Inv(0.5), 0, 1e-9);
+  close(E.t3Cdf(0), 0.5, 1e-9);
+
+  // Аналитическая производная dC(u,v)/dv = copulaH совпадает с разностной
+  const u = 0.24, v = 0.43, eps = 1e-6;
+  const cClay = (uu, vv, th) => Math.pow(Math.pow(uu, -th) + Math.pow(vv, -th) - 1, -1 / th);
+  const cGumb = (uu, vv, th) => Math.exp(-Math.pow(Math.pow(-Math.log(uu), th) + Math.pow(-Math.log(vv), th), 1 / th));
+  close(E.copulaH(u, v, 'clayton', 2.4), (cClay(u, v + eps, 2.4) - cClay(u, v - eps, 2.4)) / (2 * eps), 1e-7);
+  close(E.copulaH(u, v, 'gumbel', 2.2), (cGumb(u, v + eps, 2.2) - cGumb(u, v - eps, 2.2)) / (2 * eps), 1e-7);
+
+  // Хвостовая зависимость: у Гауссовой 0/0, у Клейтона нижний хвост > 0, у Гамбеля верхний > 0, у Стьюдента оба > 0
+  const tdG = E.copulaTailDep('gaussian', 0.75);
+  const tdC = E.copulaTailDep('clayton', 2.5);
+  const tdGu = E.copulaTailDep('gumbel', 2.5);
+  const tdSt = E.copulaTailDep('student', 0.75);
+  assert.strictEqual(tdG.lower, 0);
+  assert.strictEqual(tdG.upper, 0);
+  assert(tdC.lower > 0.70 && tdC.upper === 0);
+  assert(tdGu.upper > 0.65 && tdGu.lower === 0);
+  assert(tdSt.lower > 0.50 && Math.abs(tdSt.lower - tdSt.upper) < 1e-9);
+
+  // Энтропия и режимный гейт: максимальная неуверенность при [1/3, 1/3, 1/3] ставит паузу
+  close(E.hmmEntropy([1 / 3, 1 / 3, 1 / 3]), 1.0, 1e-6);
+  assert(E.hmmEntropy([0.90, 0.06, 0.04]) < 0.40);
+  assert.strictEqual(E.regimeGate([0.34, 0.34, 0.32]).state, 'paused_uncertain');
+  assert.strictEqual(E.regimeGate([0.34, 0.34, 0.32]).sizeMult, 0);
+  assert.strictEqual(E.regimeGate([0.15, 0.20, 0.65]).state, 'blocked_break');
+  assert.strictEqual(E.regimeGate([0.15, 0.20, 0.65]).forceExit, true);
+  assert.strictEqual(E.regimeGate([0.82, 0.11, 0.07]).sizeMult, 1.0);
+}
+
+// 43. Отсутствие заглядывания в будущее и сравнение 4 схем × 11 историй в разделе «Режимы HMM и копулы»
+{
+  const rg = E.genRegimeScenario(7, E.REGIME_SCENARIOS[2]);
+  ['naive_z', 'hmm_gate', 'copula_only', 'hmm_copula'].forEach((md) => {
+    const full = E.backtestRegimeCopula(rg, { mode: md });
+    const cutRg = {
+      legA: rg.legA.slice(0, 190), legB: rg.legB.slice(0, 190),
+      spread: rg.spread.slice(0, 190), execSpread: rg.execSpread.slice(0, 190),
+      trueState: rg.trueState.slice(0, 190), opts: rg.opts
+    };
+    const part = E.backtestRegimeCopula(cutRg, { mode: md });
+    for (let i = 0; i < 189; i++) {
+      close(full.pos[i], part.pos[i], 1e-9);
+      close(full.signalArr[i] || 0, part.signalArr[i] || 0, 1e-9);
+    }
+  });
+
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  const agg = {};
+  E.REGIME_SCENARIOS.forEach((sc) => {
+    let tNz = 0, tHm = 0, tCo = 0, tHc = 0;
+    seeds.forEach((sd) => {
+      const d = E.genRegimeScenario(sd, sc);
+      const feat = E.prepareRegimeFeatures(d, 45);
+      tNz += E.backtestRegimeCopula(d, { mode: 'naive_z', precomputed: feat }).metrics.total;
+      tHm += E.backtestRegimeCopula(d, { mode: 'hmm_gate', precomputed: feat }).metrics.total;
+      tCo += E.backtestRegimeCopula(d, { mode: 'copula_only', precomputed: feat }).metrics.total;
+      tHc += E.backtestRegimeCopula(d, { mode: 'hmm_copula', precomputed: feat }).metrics.total;
+    });
+    agg[sc.id] = { tNz, tHm, tCo, tHc };
+    console.log('режимы и копулы, «' + sc.name + '»: Z ' + tNz.toFixed(0) + ', HMM ' + tHm.toFixed(0) + ', копула ' + tCo.toFixed(0) + ', HMM+копула ' + tHc.toFixed(0));
+  });
+  assert(agg.quiet_break.tHm > 50 && agg.quiet_break.tNz < -300 && agg.quiet_break.tCo < -300);
+  assert(agg.storm_grey.tHm > 0 && agg.storm_grey.tHc > 0 && agg.storm_grey.tNz < 0);
+  assert(agg.clayton_tails.tHc > 30 && agg.clayton_tails.tHm < 10 && agg.clayton_tails.tCo < 0);
+  assert(agg.short_sample_v3.tHm > agg.short_sample_v3.tHc && agg.short_sample_v3.tHm > agg.short_sample_v3.tCo);
+}
+
 console.log('OK: все проверки пройдены');
