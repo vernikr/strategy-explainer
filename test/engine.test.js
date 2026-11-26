@@ -298,9 +298,10 @@ console.log('со сломом связи: сделок', br.count, 'итог', 
   close(ct.tau, -2.0); close(ct.halfLife, Math.log(0.5) / Math.log(0.2));
   assert.strictEqual(ct.passed, false); // на 6 точках порог Энгла — Грейнджера около −4,02, τ = −2,0 не проходит
   // Если ряд не сжимается (b >= 0), полувозврат не определён (null)
-  const up = E.dfTest([1, 2, 4, 8, 16]);
+  const up = E.dfTest([1, 2, 5, 9, 18]);
   assert.ok(up.b > 0 && up.tau > 0);
   assert.strictEqual(up.halfLife, null);
+  assert.strictEqual(E.dfTest([1, 2, 4, 8, 16]).tau, null); // нулевые остатки → se = 0 → делить не на что
   // Критические пороги Энгла — Грейнджера строже (меньше) Дики — Фуллера, а на коротком окне строже, чем на длинном
   assert.ok(E.egCrit(100, 5) < E.dfCrit(100, 5));
   assert.ok(E.egCrit(50, 5) < E.egCrit(300, 5));
