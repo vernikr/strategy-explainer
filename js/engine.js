@@ -73,6 +73,58 @@
     return { mean, std, z };
   }
 
+  /* Экспоненциальное взвешивание. Скорость забывания задаётся «эквивалентной длиной» N:
+     alpha = 2 / (N + 1). Вес дня, прошедшего k дней назад, равен (1 − alpha)^k (сегодня k = 0, вес 1).
+     Среднее и разброс считаются как взвешенные по ВСЕЙ прошлой истории и делятся на сумму весов.
+     Рекуррентная запись S_t = x_t + (1 − alpha) * S_(t−1) даёт те же числа без перебора истории. */
+  const alphaOf = (n) => 2 / (n + 1);
+  const halfLife = (n) => Math.log(0.5) / Math.log(1 - alphaOf(n));
+  // Доля всего веса, которая приходится на k последних дней (для длинной истории).
+  const weightShare = (n, k) => 1 - Math.pow(1 - alphaOf(n), k);
+
+  function ewma(series, n) {
+    const len = series.length;
+    const q = 1 - alphaOf(n);
+    const mean = new Array(len).fill(null);
+    const std = new Array(len).fill(null);
+    const z = new Array(len).fill(null);
+    let W = 0, S1 = 0, S2 = 0;
+    for (let t = 0; t < len; t++) {
+      const x = series[t];
+      W = 1 + q * W; S1 = x + q * S1; S2 = x * x + q * S2;
+      if (t < n - 1) continue;
+      const m = S1 / W;
+      const sd = Math.sqrt(Math.max(0, S2 / W - m * m));
+      mean[t] = m; std[t] = sd;
+      z[t] = sd > 1e-9 ? (x - m) / sd : null;
+    }
+    return { mean, std, z };
+  }
+
+  // Прямая формула (медленная, по всей истории): для сверки с рекурсией и для пошагового разбора.
+  function explainEwma(series, n, t, shown) {
+    if (t < n - 1) return null;
+    const alpha = alphaOf(n), q = 1 - alpha;
+    let W = 0, Wx = 0;
+    for (let k = 0; k <= t; k++) { const w = Math.pow(q, k); W += w; Wx += w * series[t - k]; }
+    const mean = Wx / W;
+    const rows = [];
+    let Wsq = 0;
+    const earlier = { count: 0, w: 0, wx: 0, wsq: 0 };
+    for (let k = 0; k <= t; k++) {
+      const idx = t - k, w = Math.pow(q, k), dev = series[idx] - mean, wsq = w * dev * dev;
+      Wsq += wsq;
+      if (k < shown) rows.push({ idx, k, value: series[idx], w, share: 0, wx: w * series[idx], dev, wsq });
+      else { earlier.count++; earlier.w += w; earlier.wx += w * series[idx]; earlier.wsq += wsq; }
+    }
+    rows.forEach((r) => { r.share = r.w / W; });
+    rows.reverse();
+    const variance = Wsq / W, std = Math.sqrt(variance);
+    return { alpha, halfLife: halfLife(n), rows, earlier, earlierShare: earlier.w / W, W, Wx, mean, Wsq, variance, std, value: series[t], z: std > 1e-9 ? (series[t] - mean) / std : null };
+  }
+
+  const stats = (series, n, mode) => (mode === 'ewma' ? ewma(series, n) : rolling(series, n));
+
   /* Все промежуточные числа для одного дня: то, что показывает экран «Пошаговый разбор». */
   function explainBar(series, n, t) {
     if (t < n - 1) return null;
@@ -101,14 +153,14 @@
     return null;
   }
 
-  const DEFAULTS = { n: 30, entryZ: 2, exitZ: 0.5, stopZ: 3.5, maxHold: 0, cost: 0.5, delay: 0 };
+  const DEFAULTS = { mode: 'sma', n: 30, entryZ: 2, exitZ: 0.5, stopZ: 3.5, maxHold: 0, cost: 0.5, delay: 0 };
 
   /* Позиция: +1 = «лонг спреда» (купили A, продали B), −1 = «шорт спреда» (продали A, купили B),
      0 = вне рынка. Результат сделки в пунктах = направление × (спред на выходе − спред на входе) − издержки. */
   function backtest(series, params) {
     const p = Object.assign({}, DEFAULTS, params || {});
     const len = series.length;
-    const { mean, std, z } = rolling(series, p.n);
+    const { mean, std, z } = stats(series, p.n, p.mode);
     const trades = [];
     const equity = new Array(len).fill(0);
     const pos = new Array(len).fill(0);
@@ -201,7 +253,7 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, rolling, explainBar, decide, backtest, sweep, tune, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const api = { generate, rolling, ewma, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
