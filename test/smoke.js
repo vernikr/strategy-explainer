@@ -37,7 +37,7 @@ if (!fs.existsSync(CHROME)) {
     const errs = (r.stderr || '').split('\n').filter((l) => /CONSOLE/.test(l) && /(Uncaught|Error|error)/.test(l));
     return { dom: r.stdout || '', errs };
   };
-  const stratIds = ['zscore', 'ewma', 'robust', 'hedge'];
+  const stratIds = ['zscore', 'ewma', 'robust', 'hedge', 'coint'];
   stratIds.forEach((id) => {
     const first = dump(id + '/1');
     const titles = [...first.dom.matchAll(/<button class="step[^"]*" data-i="\d+"><span class="num">\d+<\/span><span>([^<]*)<\/span>/g)].map((x) => x[1]);
