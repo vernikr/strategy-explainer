@@ -819,7 +819,315 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  /* ---------- Модификации («Приёмы», #35): лог-спред, вход на развороте, лесенка, фильтр режима σ ---------- */
+  function genTactics(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320, b0: 100, driftPct: 0, scaleWave: false, stepPct: 0.008,
+      logMode: false, logMean: 0.30, logNoise: 0.011,
+      meanSpread: 8, reversion: 0.22, noise: 2.2,
+      storms: null, wideMode: false
+    }, opts || {});
+    const rng = mulberry32(o.seed * 29 + 11);
+    const gauss = makeGauss(rng);
+    const a = [], b = [], spread = [], logSpread = [], isStorm = [];
+    let pB = o.b0, u = 0;
+    for (let t = 0; t < o.n; t++) {
+      if (t > 0) {
+        const dr = o.scaleWave ? (t < 190 ? 0.0078 : -0.0085) : o.driftPct;
+        pB = Math.max(15, pB * Math.exp(dr + o.stepPct * gauss()));
+      }
+      let stormNow = null;
+      if (o.storms) {
+        for (const st of o.storms) if (t >= st[0] && t <= st[1]) { stormNow = st; break; }
+      }
+      isStorm.push(!!stormNow);
+      if (o.logMode) {
+        u += -o.reversion * u + o.logNoise * gauss();
+        const pA = round2(pB * Math.exp(o.logMean + u));
+        const pBr = round2(pB);
+        a.push(pA); b.push(pBr);
+        spread.push(round2(pA - pBr));
+        logSpread.push(Math.log(pA) - Math.log(pBr));
+      } else if (o.wideMode) {
+        const s0 = Math.sin((2 * Math.PI * (t + (o.seed % 7))) / 18);
+        const cyc = 6.0 * (s0 >= 0 ? 1 : -1) * Math.pow(Math.abs(s0), 2.3);
+        const deep = (t > 35 && (t + o.seed) % 54 === 4) ? (s0 >= 0 ? 4.4 : -4.4) : 0;
+        u = cyc + deep + o.noise * gauss();
+        const pBr = round2(pB);
+        const sp = round2(o.meanSpread + u);
+        const pA = round2(Math.max(5, pBr + sp));
+        a.push(pA); b.push(pBr);
+        spread.push(round2(pA - pBr));
+        logSpread.push(Math.log(pA) - Math.log(pBr));
+      } else {
+        const rev = stormNow ? 0.015 : o.reversion;
+        const ns = stormNow ? o.noise * 4.6 : o.noise;
+        const push = stormNow ? stormNow[2] : 0;
+        u += -rev * u + ns * gauss() + push;
+        const pBr = round2(pB);
+        const sp = round2(o.meanSpread + u);
+        const pA = round2(Math.max(5, pBr + sp));
+        a.push(pA); b.push(pBr);
+        spread.push(round2(pA - pBr));
+        logSpread.push(Math.log(pA) - Math.log(pBr));
+      }
+    }
+    return { a, b, spread, logSpread, isStorm, opts: o };
+  }
+
+  const TACTIC_SCENARIOS = [
+    { id: 'calm', name: 'Спокойная резинка', opts: { meanSpread: 8, reversion: 0.24, noise: 2.2 }, note: 'Цены ходят вокруг 100 пунктов, спред устойчиво возвращается к среднему без смены масштаба и бурь.' },
+    { id: 'growth', name: 'Смена масштаба цен в 4 раза', opts: { logMode: true, b0: 55, scaleWave: true, stepPct: 0.016, logMean: 0.35, logNoise: 0.009, reversion: 0.11 }, note: 'Рынок сначала вырастает более чем в 4 раза, а затем откатывается, при этом A стабильно держится около +42% к B (ln A − ln B ≈ 0,35).' },
+    { id: 'storm', name: 'Шторм и пробои режима', opts: { b0: 140, meanSpread: 8, reversion: 0.25, noise: 1.8, storms: [[85, 138, 1.3], [205, 258, -1.3]] }, note: 'Дважды за историю на рынке начинается буря: дневной разброс подскакивает вчетверо, а спред много дней подряд уносит против позиции.' },
+    { id: 'wide', name: 'Ступенчатые заходы (1,8σ и 2,8σ)', opts: { meanSpread: 8, wideMode: true, noise: 0.45 }, note: 'Регулярные умеренные качания на 1,7–1,9σ (не дотягивающие до жёсткого порога 2,0σ) чередуются с глубокими растяжениями до 2,8σ.' }
+  ];
+  const genTacticScenario = (seed, scn) => genTactics(Object.assign({ seed }, scn.opts));
+
+  /* Фильтр режима волатильности без заглядывания в будущее: сравнивает среднеквадратичный дневной шаг спреда
+     за короткое окно W (по умолчанию min(N, 15)) со спокойной базой за длинное окно L (по умолчанию 90 дн.). */
+  function volRegime(series, nShort, nLong, ratioMax) {
+    const len = series.length;
+    const W = Math.max(8, Math.min(nShort || 15, 15));
+    const L = Math.max(W + 20, nLong || 90);
+    const rMax = ratioMax !== undefined ? ratioMax : 1.35;
+    const stepSq = new Array(len).fill(0);
+    for (let t = 1; t < len; t++) { const d = series[t] - series[t - 1]; stepSq[t] = d * d; }
+    const stdShort = new Array(len).fill(null);
+    const stdLong = new Array(len).fill(null);
+    const ratio = new Array(len).fill(null);
+    const ok = new Array(len).fill(true);
+    for (let t = W; t < len; t++) {
+      let s1 = 0;
+      for (let k = t - W + 1; k <= t; k++) s1 += stepSq[k];
+      const vS = Math.sqrt(s1 / W);
+      const wL = Math.min(t, L);
+      let s2 = 0;
+      for (let k = t - wL + 1; k <= t; k++) s2 += stepSq[k];
+      const vL = Math.sqrt(s2 / wL);
+      stdShort[t] = vS;
+      stdLong[t] = vL;
+      ratio[t] = vL > 1e-12 ? vS / vL : null;
+      ok[t] = ratio[t] !== null && ratio[t] <= rMax;
+    }
+    return { stdShort, stdLong, ratio, ok, nShort: W, nLong: L, ratioMax: rMax };
+  }
+
+  /* Универсальный симулятор четырёх приёмов:
+     - logMode: false (A − B) | 'equalLots' (сигнал ln A − ln B, но равное число контрактов) | 'notional' (сигнал ln A − ln B и равный денежный объём 100 п. на ногу);
+     - reversal: true — вход после подтверждения отката от экстремума на reboundZ сигм;
+     - scaleIn: true — набор позиции двумя половинами (0,5 на entryZ1 и 0,5 на entryZ2) и по желанию частичный выход partialExit;
+     - volFilter: true — запрет новых входов и доборов при σ_короткой / σ_длинной > volRatioMax (выходы не блокируются). */
+  function backtestTactics(dataOrSeries, params) {
+    const isObj = !Array.isArray(dataOrSeries);
+    const a = isObj ? dataOrSeries.a : null;
+    const b = isObj ? dataOrSeries.b : null;
+    const rawSpread = isObj ? (dataOrSeries.spread || a.map((v, i) => v - b[i])) : dataOrSeries;
+    const p = Object.assign({}, DEFAULTS, {
+      logMode: false, notionalBase: 100,
+      reversal: false, reboundZ: 0.45,
+      scaleIn: false, entryZ1: null, addZ: 0.85, partialExit: true,
+      volFilter: false, volLong: 100, volRatioMax: 1.35
+    }, params || {});
+
+    const useLog = p.logMode === 'notional' || p.logMode === 'equalLots' || p.logMode === true;
+    const notionalMode = p.logMode === 'notional' || p.logMode === true;
+    const sigSeries = useLog && a && b ? a.map((v, i) => Math.log(v) - Math.log(b[i])) : rawSpread.slice();
+    const st = rolling(sigSeries, p.n);
+    const reg = volRegime(sigSeries, p.n, p.volLong, p.volRatioMax);
+    const len = sigSeries.length;
+
+    const e1 = p.scaleIn ? (p.entryZ1 !== null ? p.entryZ1 : Math.max(0.75, p.entryZ - 0.35)) : p.entryZ;
+    const rawE2 = e1 + (p.addZ !== undefined ? p.addZ : 0.85);
+    const e2 = p.stopZ !== null ? Math.min(rawE2, p.stopZ - 0.3) : rawE2;
+    const ex1 = Math.min(e1 - 0.35, p.exitZ + 0.55);
+
+    const trades = [];
+    const equity = new Array(len).fill(0);
+    const pos = new Array(len).fill(0);
+    const signal = new Array(len).fill(null);
+    const executed = new Array(len).fill(null);
+    const blocked = new Array(len).fill(null);
+    const armedState = new Array(len).fill(null);
+
+    let curDir = 0, tranches = [], hadSecond = false, firstIdx = null, realized = 0, curTradeLog = null;
+    let arm = { dir: 0, peakZ: null, armedIdx: null };
+
+    function legGross(dir, sz, tr, tOut) {
+      if (notionalMode && a && b) {
+        return dir * sz * p.notionalBase * (((a[tOut] - tr.aIn) / tr.aIn) - ((b[tOut] - tr.bIn) / tr.bIn));
+      }
+      if (p.logMode === 'equalLots' && a && b) {
+        const eqLots = (2 * p.notionalBase) / (tr.aIn + tr.bIn);
+        return dir * sz * eqLots * ((a[tOut] - tr.aIn) - (b[tOut] - tr.bIn));
+      }
+      if (a && b) {
+        return dir * sz * ((a[tOut] - tr.aIn) - (b[tOut] - tr.bIn));
+      }
+      return dir * sz * (rawSpread[tOut] - tr.sIn);
+    }
+
+    function openTranche(dir, sz, t, reasonTag) {
+      const entryFee = p.scaleIn ? 0.30 * p.cost : p.cost;
+      realized -= entryFee;
+      const tr = { sz, inIdx: t, sIn: sigSeries[t], rawIn: rawSpread[t], aIn: a ? a[t] : null, bIn: b ? b[t] : null, zIn: st.z[t], entryFee };
+      if (curDir === 0) {
+        curDir = dir;
+        firstIdx = t;
+        hadSecond = false;
+        curTradeLog = {
+          dir, entryIdx: t, signalIn: t, entryS: sigSeries[t], entryRaw: rawSpread[t], entryZ: st.z[t],
+          tranchesOpened: 1, partialExits: 0, grossAcc: 0, costAcc: entryFee, events: [{ type: reasonTag || 'open', t, sz, z: st.z[t], s: sigSeries[t] }]
+        };
+      } else {
+        hadSecond = true;
+        curTradeLog.tranchesOpened++;
+        curTradeLog.costAcc += entryFee;
+        curTradeLog.events.push({ type: 'add', t, sz, z: st.z[t], s: sigSeries[t] });
+      }
+      tranches.push(tr);
+      executed[t] = { type: hadSecond && tranches.length > 1 ? 'add' : 'open', dir, sz };
+    }
+
+    function closePortion(closeAll, t, reason) {
+      if (!tranches.length) return;
+      if (!closeAll && tranches.length > 1) {
+        const tr = tranches.pop();
+        const g = legGross(curDir, tr.sz, tr, t);
+        const exitFee = 0.30 * p.cost;
+        realized += g - exitFee;
+        curTradeLog.partialExits++;
+        curTradeLog.grossAcc += g;
+        curTradeLog.costAcc += exitFee;
+        curTradeLog.events.push({ type: 'partial', t, sz: tr.sz, z: st.z[t], s: sigSeries[t], gross: g });
+        executed[t] = { type: 'partial', dir: curDir, sz: tr.sz, reason };
+        return;
+      }
+      let gSum = 0;
+      const totalSzClosed = tranches.reduce((s, x) => s + x.sz, 0);
+      tranches.forEach((tr) => { gSum += legGross(curDir, tr.sz, tr, t); });
+      const exitFee = p.scaleIn ? (totalSzClosed > 0.75 ? 0.50 * p.cost : 0.30 * p.cost) : 0;
+      realized += gSum - exitFee;
+      const gross = curTradeLog.grossAcc + gSum;
+      const cost = curTradeLog.costAcc + exitFee;
+      curTradeLog.events.push({ type: 'close', t, sz: totalSzClosed, z: st.z[t], s: sigSeries[t], gross: gSum, reason });
+      trades.push({
+        dir: curDir, signalIn: curTradeLog.signalIn, entryIdx: curTradeLog.entryIdx, exitIdx: t, signalOut: t,
+        entryS: curTradeLog.entryS, exitS: sigSeries[t], entryRaw: curTradeLog.entryRaw, exitRaw: rawSpread[t],
+        entryZ: curTradeLog.entryZ, exitZ: st.z[t],
+        tranches: curTradeLog.tranchesOpened, partialExits: curTradeLog.partialExits, events: curTradeLog.events,
+        reason, gross, cost, net: gross - cost, bars: t - curTradeLog.entryIdx
+      });
+      tranches = [];
+      curDir = 0; hadSecond = false; firstIdx = null; curTradeLog = null;
+      executed[t] = { type: 'close', reason };
+    }
+
+    for (let t = 0; t < len; t++) {
+      const z = st.z[t];
+      const ok = !p.volFilter || reg.ok[t];
+      if (z !== null) {
+        if (curDir === 0) {
+          let wantDir = 0;
+          if (!p.reversal) {
+            if (z <= -e1) wantDir = 1;
+            else if (z >= e1) wantDir = -1;
+          } else {
+            if (p.stopZ !== null && Math.abs(z) >= p.stopZ) {
+              arm = { dir: 0, peakZ: null, armedIdx: null };
+            } else if (arm.dir === 0) {
+              if (z <= -e1) arm = { dir: 1, peakZ: z, armedIdx: t };
+              else if (z >= e1) arm = { dir: -1, peakZ: z, armedIdx: t };
+            } else if (arm.dir === 1) {
+              if (z < arm.peakZ) arm.peakZ = z;
+              else if (z >= -p.exitZ) arm = { dir: 0, peakZ: null, armedIdx: null };
+              else if (z - arm.peakZ >= p.reboundZ && z <= -(p.exitZ + 0.2)) {
+                wantDir = 1;
+                arm = { dir: 0, peakZ: null, armedIdx: null };
+              }
+            } else if (arm.dir === -1) {
+              if (z > arm.peakZ) arm.peakZ = z;
+              else if (z <= p.exitZ) arm = { dir: 0, peakZ: null, armedIdx: null };
+              else if (arm.peakZ - z >= p.reboundZ && z >= p.exitZ + 0.2) {
+                wantDir = -1;
+                arm = { dir: 0, peakZ: null, armedIdx: null };
+              }
+            }
+          }
+          if (wantDir !== 0) {
+            if (!ok) blocked[t] = { type: 'open', dir: wantDir, reason: 'vol' };
+            else {
+              const sz = p.scaleIn ? 0.5 : 1;
+              signal[t] = { type: 'open', dir: wantDir, reason: 'entry', sz };
+              openTranche(wantDir, sz, t, 'open');
+            }
+          }
+        } else {
+          arm = { dir: 0, peakZ: null, armedIdx: null };
+          const held = t - firstIdx;
+          const stopHit = p.stopZ !== null && ((curDir === 1 && z <= -p.stopZ) || (curDir === -1 && z >= p.stopZ));
+          const targetHit = (curDir === 1 && z >= -p.exitZ) || (curDir === -1 && z <= p.exitZ);
+          const timeHit = p.maxHold > 0 && held >= p.maxHold;
+          if (stopHit) {
+            signal[t] = { type: 'close', reason: 'stop' };
+            closePortion(true, t, 'stop');
+          } else if (targetHit) {
+            signal[t] = { type: 'close', reason: 'target' };
+            closePortion(true, t, 'target');
+          } else if (timeHit) {
+            signal[t] = { type: 'close', reason: 'time' };
+            closePortion(true, t, 'time');
+          } else if (p.scaleIn && !hadSecond && tranches.length === 1 && ((curDir === 1 && z <= -e2) || (curDir === -1 && z >= e2))) {
+            if (!ok) blocked[t] = { type: 'add', dir: curDir, reason: 'vol' };
+            else {
+              signal[t] = { type: 'add', dir: curDir, reason: 'scale_in', sz: 0.5 };
+              openTranche(curDir, 0.5, t, 'add');
+            }
+          } else if (p.scaleIn && p.partialExit && tranches.length === 2 && ((curDir === 1 && z >= -ex1) || (curDir === -1 && z <= ex1))) {
+            signal[t] = { type: 'partial', dir: curDir, reason: 'partial_target', sz: 0.5 };
+            closePortion(false, t, 'partial');
+          }
+        }
+      }
+      armedState[t] = { dir: arm.dir, peakZ: arm.peakZ, armedIdx: arm.armedIdx };
+      const curSz = tranches.reduce((s, x) => s + x.sz, 0);
+      pos[t] = curDir * curSz;
+      let openPnl = 0;
+      tranches.forEach((tr) => { openPnl += legGross(curDir, tr.sz, tr, t); });
+      equity[t] = realized + openPnl;
+    }
+
+    if (curDir !== 0) {
+      const last = len - 1;
+      closePortion(true, last, 'end');
+      pos[last] = 0;
+      equity[last] = realized;
+    }
+
+    return {
+      params: Object.assign({}, p, { e1, e2, ex1 }),
+      trades, equity, pos, signal, executed, blocked, armedState,
+      sigSeries, rawSpread, mean: st.mean, std: st.std, z: st.z, regime: reg,
+      metrics: metrics(trades, equity, pos)
+    };
+  }
+
+  function explainTactics(d, n, t, opts) {
+    if (t < n - 1) return null;
+    const o = Object.assign({ logMode: false, volLong: 100, volRatioMax: 1.35 }, opts || {});
+    const useLog = o.logMode === 'notional' || o.logMode === 'equalLots' || o.logMode === true;
+    const sigSeries = useLog ? d.a.map((v, i) => Math.log(v) - Math.log(d.b[i])) : d.spread;
+    const ex = explainBar(sigSeries, n, t);
+    const reg = volRegime(sigSeries, n, o.volLong, o.volRatioMax);
+    return Object.assign({
+      a: d.a[t], b: d.b[t], raw: d.spread[t],
+      lnA: Math.log(d.a[t]), lnB: Math.log(d.b[t]), logSp: Math.log(d.a[t]) - Math.log(d.b[t]),
+      useLog,
+      volShort: reg.stdShort[t], volLong: reg.stdLong[t], volRatio: reg.ratio[t], volOk: reg.ok[t],
+      nShort: reg.nShort, nLong: reg.nLong
+    }, ex);
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

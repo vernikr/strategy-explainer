@@ -427,4 +427,57 @@ for (const sc of E.CAL_SCENARIOS) {
   console.log('календарный, «' + sc.name + '»: наивная ' + nv.toFixed(0) + ', выход до эксп. ' + cl.toFixed(0) + ', ролл ' + rl.toFixed(0) + ', ролл+сезон ' + rs.toFixed(0));
 }
 
+// 30. Приёмы (#35): эквивалентность базе при выключенных флагах, ручные проверки лог-спреда, разворота, лесенки и фильтра σ.
+{
+  const g = E.generate({ seed: 21 });
+  const baseBt = E.backtest(g.spread, { n: 30, entryZ: 2, exitZ: 0.5, stopZ: 3.5, cost: 0.5 });
+  const tacBt = E.backtestTactics(g, { n: 30, entryZ: 2, exitZ: 0.5, stopZ: 3.5, cost: 0.5 });
+  assert.strictEqual(tacBt.metrics.count, baseBt.metrics.count);
+  close(tacBt.metrics.total, baseBt.metrics.total, 1e-9);
+  for (let i = 0; i < g.spread.length; i++) close(tacBt.equity[i], baseBt.equity[i], 1e-9);
+
+  // Лог-спред с выравниванием денежного объёма: при пропорциональном росте обеих цен на +50% прибыль = 0!
+  const dScale = {
+    a: [150, 150, 150, 150, 120, 225],
+    b: [100, 100, 100, 100, 100, 150],
+    spread: [50, 50, 50, 50, 20, 75]
+  };
+  const btNotional = E.backtestTactics(dScale, { n: 5, entryZ: 1.5, exitZ: 0.2, stopZ: 10, cost: 0, logMode: 'notional', notionalBase: 100 });
+  assert.strictEqual(btNotional.trades.length, 1);
+  // На входе A=120, B=100 (ln(1,2)); на выходе A=225 (+87,5%), B=150 (+50%) → чистый процентный возврат = 87,5% − 50% = +37,5 п.
+  close(btNotional.trades[0].gross, 37.5, 1e-6);
+
+  // Отсутствие заглядывания в будущее для всех 4 режимов
+  const dFull = E.genTacticScenario(7, E.TACTIC_SCENARIOS[2]);
+  const cut = 180;
+  const dCut = { a: dFull.a.slice(0, cut), b: dFull.b.slice(0, cut), spread: dFull.spread.slice(0, cut) };
+  for (const cfg of [
+    { logMode: 'notional' },
+    { reversal: true, reboundZ: 0.45 },
+    { scaleIn: true, entryZ1: 1.65, addZ: 0.85, partialExit: true },
+    { volFilter: true, volLong: 90, volRatioMax: 1.35 }
+  ]) {
+    const f1 = E.backtestTactics(dFull, cfg);
+    const f2 = E.backtestTactics(dCut, cfg);
+    for (let i = 0; i < cut - 1; i++) {
+      assert.strictEqual(f1.pos[i], f2.pos[i]);
+      close(f1.equity[i], f2.equity[i], 1e-9);
+    }
+  }
+}
+
+// 31. Сводка по 4 приёмам (смотрим глазами).
+for (const sc of E.TACTIC_SCENARIOS) {
+  let b = 0, lg = 0, rv = 0, sl = 0, vf = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const d = E.genTacticScenario(sd, sc);
+    b += E.backtestTactics(d, {}).metrics.total;
+    lg += E.backtestTactics(d, { logMode: 'notional' }).metrics.total;
+    rv += E.backtestTactics(d, { reversal: true, reboundZ: 0.45 }).metrics.total;
+    sl += E.backtestTactics(d, { scaleIn: true, entryZ1: 1.65, addZ: 0.85, partialExit: true }).metrics.total;
+    vf += E.backtestTactics(d, { volFilter: true, volLong: 100, volRatioMax: 1.35 }).metrics.total;
+  });
+  console.log('приёмы, «' + sc.name + '»: база ' + b.toFixed(0) + ', лог ' + lg.toFixed(0) + ', разворот ' + rv.toFixed(0) + ', лесенка ' + sl.toFixed(0) + ', фильтр_σ ' + vf.toFixed(0));
+}
+
 console.log('OK: все проверки пройдены');
