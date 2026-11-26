@@ -581,4 +581,59 @@ for (const sc of E.BASKET_SCENARIOS) {
   console.log('корзины 3+, «' + sc.name + '»: пара ' + pr.toFixed(0) + ', фикс ' + fx.toFixed(0) + ', OLS ' + ol.toFixed(0) + ', OLS+Маккиннон ' + oc.toFixed(0));
 }
 
+// 36. Микроструктура MOEX (#53): формула VM, выравнивание full/mini, 4 слоя издержек, RoM и честность симулятора.
+{
+  // USDRUBF: шаг R = 0.01, стоимость шага W = 10 ₽ -> рост с 90.20 до 91.45 даёт +1250 ₽ на 1 лот
+  close(E.calcVM(90.20, 91.45, 0.01, 10, 1), 1250, 1e-9);
+  // MIX против MMI (номиналы 300 000 ₽ и 30 000 ₽) -> 1 MIX : 10 MMI
+  const mm = E.matchContractLots(300000, 30000, 5);
+  assert.strictEqual(mm.qA, 1);
+  assert.strictEqual(mm.qB, 10);
+  close(mm.relErr, 0, 1e-12);
+
+  // Нативный стакан в штиль дешевле ручного леггирования, а в стресс сравнивается с ним
+  const cNat = E.decomposeCosts({ nativeBook: true, stressed: false });
+  const cLeg = E.decomposeCosts({ nativeBook: false, stressed: false });
+  assert(cNat.total < cLeg.total && cNat.usedNative === true);
+  const cStr = E.decomposeCosts({ nativeBook: true, stressed: true });
+  assert.strictEqual(cStr.usedNative, false);
+
+  // RoM со скидкой 72% выше стрессового RoM
+  const rom = E.calcRoM(25, 90, 0.72, 1.7, 0.15);
+  assert(rom.calmGo < rom.stressGo && rom.romCalmPct > rom.romStressPct);
+
+  // Проверка отсутствия заглядывания в будущее и точного баланса сделок
+  const mxD = E.genMoexScenario(7, E.MOEX_SCENARIOS[3]);
+  const cut = 180;
+  const sub = { opts: mxD.opts };
+  ['spPerp', 'spQuart', 'spRaw', 'lastRaw', 'fairBasis', 'cleanSpread', 'swapPaid', 'swapExtraDay', 'carryDays', 'isWeekend', 'isDivDay', 'divGapArr', 'inStress', 'reqGo'].forEach((k) => { sub[k] = mxD[k].slice(0, cut); });
+  for (const mode of ['naive_last', 'raw_sp', 'clean_leg', 'moex_pro']) {
+    const b1 = E.backtestMoex(mxD, { moexMode: mode });
+    close(b1.equity[b1.equity.length - 1], b1.metrics.total, 1e-6);
+    b1.trades.forEach((tr) => {
+      close(tr.gross, tr.priceVm + tr.divComp + tr.swapFlow, 1e-9);
+      close(tr.net, tr.gross - tr.cost, 1e-9);
+    });
+    const b2 = E.backtestMoex(sub, { moexMode: mode });
+    for (let i = 0; i < cut - 1; i++) {
+      assert.strictEqual(b1.pos[i], b2.pos[i]);
+      close(b1.equity[i], b2.equity[i], 1e-9);
+    }
+  }
+}
+
+// 37. Сводка по микроструктуре MOEX (смотрим глазами).
+for (const sc of E.MOEX_SCENARIOS) {
+  let nl = 0, rs = 0, cl = 0, mp = 0, mc = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const d = E.genMoexScenario(sd, sc);
+    nl += E.backtestMoex(d, { moexMode: 'naive_last' }).metrics.total;
+    rs += E.backtestMoex(d, { moexMode: 'raw_sp' }).metrics.total;
+    const rcl = E.backtestMoex(d, { moexMode: 'clean_leg' });
+    cl += rcl.metrics.total; mc += rcl.marginCalls;
+    mp += E.backtestMoex(d, { moexMode: 'moex_pro' }).metrics.total;
+  });
+  console.log('MOEX, «' + sc.name + '»: ласт ' + nl.toFixed(0) + ', сырой SP ' + rs.toFixed(0) + ', чистый+легг ' + cl.toFixed(0) + ' (MC ' + mc + '), MOEX Pro ' + mp.toFixed(0));
+}
+
 console.log('OK: все проверки пройдены');

@@ -1660,7 +1660,267 @@
     };
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  /* ---------- Микроструктура срочного рынка MOEX (#53, #46) ---------- */
+  /* Формула вариационной маржи клиринга FORTS: VM = lots × (SP₁ − SP₀) × (W ÷ R),
+     где SP — расчётная цена клиринга, R — минимальный шаг цены (тик), W — стоимость шага цены в рублях. */
+  function calcVM(sp0, sp1, tickSize, tickVal, lots) {
+    return (lots === undefined ? 1 : lots) * (sp1 - sp0) * (tickVal / tickSize);
+  }
+
+  /* Подбор целых лотов для выравнивания денежного номинала двух контрактов с разной контрактной экономикой
+     (например, полный MIX и мини-фьючерс MMI 1:10 или Si и USDRUBF). */
+  function matchContractLots(nomA, nomB, maxA) {
+    const lim = maxA || 10;
+    const ratio = nomA / nomB;
+    let best = null;
+    for (let qA = 1; qA <= lim; qA++) {
+      const qB = Math.max(1, Math.round(qA * ratio));
+      const rubA = qA * nomA, rubB = qB * nomB;
+      const relErr = Math.abs(rubA - rubB) / rubA;
+      const score = relErr + 0.002 * qA;
+      if (!best || score < best.score) best = { qA, qB, rubA, rubB, relErr, ratio, score };
+    }
+    return best;
+  }
+
+  /* Четырёхслойная декомпозиция издержек круга (вход + выход):
+     1) биржевой сбор (maker дешевле taker), 2) клиринговый сбор, 3) брокерская комиссия,
+     4) полуспред и проскальзывание по глубине стакана (нативный стакан спреда против ручного леггирования; в стресс имплицированная ликвидность исчезает). */
+  function decomposeCosts(opts) {
+    const o = Object.assign({
+      exchMaker: 0.015, exchTaker: 0.035, clearing: 0.015, broker: 0.02,
+      halfSpreadLeg: 0.09, nativeSpreadHalf: 0.09, leggingSlip: 0.08,
+      volumeLots: 1, depthLots: 5, nativeBook: false, stressed: false
+    }, opts || {});
+    const mult = o.stressed ? 2.6 : 1.0;
+    const useNative = o.nativeBook && !o.stressed;
+    const exch = 2 * 2 * (useNative ? (o.exchMaker + o.exchTaker) * 0.5 : o.exchTaker);
+    const clear = 2 * 2 * o.clearing;
+    const brok = 2 * 2 * o.broker;
+    const bookImpact = (Math.max(0, o.volumeLots - 1) / Math.max(1, o.depthLots)) * 0.35 * mult;
+    const slip = useNative
+      ? (2 * o.nativeSpreadHalf * mult + bookImpact)
+      : (2 * (2 * o.halfSpreadLeg + o.leggingSlip) * mult + 2 * bookImpact);
+    const total = exch + clear + brok + slip;
+    return {
+      exch: round2(exch), clear: round2(clear), broker: round2(brok),
+      slip: round2(slip), total: round2(total), usedNative: useNative
+    };
+  }
+
+  /* Доходность на реально замороженное ГО (Return on Margin, RoM) в штиль (со скидкой D_cal) и в стресс-режиме. */
+  function calcRoM(netPts, goLegPts, discount, stressMult, stressDiscount) {
+    const rawGo = 2 * goLegPts;
+    const calmGo = rawGo * (1 - (discount === undefined ? 0.72 : discount));
+    const stressGo = rawGo * (stressMult || 1.7) * (1 - (stressDiscount === undefined ? 0.15 : stressDiscount));
+    return {
+      rawGo: round2(rawGo), calmGo: round2(calmGo), stressGo: round2(stressGo),
+      romCalmPct: calmGo > 0 ? round2((netPts / calmGo) * 100) : 0,
+      romStressPct: stressGo > 0 ? round2((netPts / stressGo) * 100) : 0
+    };
+  }
+
+  /* Генератор связки на MOEX FORTS (квартальный фьючерс против вечного / спотовой ноги с дивидендами):
+     - spPerp[t], spQuart[t]: расчётные цены вечернего клиринга (SP, 23:50);
+     - spRaw[t] = spQuart[t] − spPerp[t]: сырой спред по клирингу;
+     - lastRaw[t]: спред по последним сделкам 23:49 (с прострелами на тонкой вечерней сессии);
+     - fairBasis[t]: справедливый перенос (ставка на горизонте − ожидаемый дивиденд до отсечки);
+     - cleanSpread[t] = spRaw[t] − fairBasis[t]: очищенный от переноса и дивидендов спред;
+     - swapPaid[t], carryDays[t]: ежедневный SwapRate (в понедельник начисляется сразу за 3 дня переноса через выходные);
+     - reqGo[t]: нетто-ГО пары (в штиль со скидкой 72%, в шторм базовое ГО × 1,7 и скидка сжимается до 15%). */
+  function genMoex(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320,
+      rate0: 0.09, rateEnd: 0.09, swapExtra: 0.0,
+      divs: [], eveningNoiseProb: 0.12, eveningSpike: 2.4,
+      stressSpan: null, reversion: 0.28, noise: 1.55,
+      goLegPts: 90, calDiscount: 0.72
+    }, opts || {});
+    const rng = mulberry32(o.seed * 43 + 17);
+    const gauss = makeGauss(rng);
+
+    const spPerp = [], spQuart = [], spRaw = [], lastRaw = [], fairBasis = [], cleanSpread = [];
+    const swapPaid = [], swapExtraDay = [], carryDays = [], isWeekend = [], isDivDay = [], divGapArr = [], inStress = [], reqGo = [];
+    let spot = 900, u = 0;
+
+    for (let t = 0; t < o.n; t++) {
+      const wknd = t > 0 && t % 5 === 0;
+      const cDays = wknd ? 3 : 1;
+      const stress = o.stressSpan !== null && t >= o.stressSpan[0] && t <= o.stressSpan[1];
+
+      let divToday = 0;
+      for (const dv of o.divs) if (t === dv.exDay) divToday += dv.gap;
+
+      if (t > 0) spot = Math.max(300, spot + (stress ? 3.2 : 1.3) * gauss() - divToday);
+
+      const frac = t / Math.max(1, o.n - 1);
+      const rateNow = o.rate0 + (o.rateEnd - o.rate0) * Math.min(1, Math.max(0, (frac - 0.12) / 0.65));
+
+      let pendingDiv = 0;
+      for (const dv of o.divs) {
+        if (dv.exDay > t && dv.exDay - t <= 45) pendingDiv += dv.gap * (1 - (dv.exDay - t) / 45);
+      }
+
+      const fair = round2(90 * rateNow - pendingDiv);
+      const effNoise = stress ? o.noise * 2.0 : o.noise;
+      u += -o.reversion * u + effNoise * gauss();
+
+      const perp = round2(spot);
+      const quart = round2(spot + fair + u);
+      const raw = round2(quart - perp);
+
+      let last = raw;
+      if (o.eveningNoiseProb > 0 && rng() < o.eveningNoiseProb) {
+        last = round2(raw + (rng() < 0.5 ? 1 : -1) * (0.75 + 0.55 * rng()) * o.eveningSpike);
+      }
+
+      const dailySwap = round2((rateNow + o.swapExtra) * cDays);
+      const extraFlow = round2(o.swapExtra * cDays);
+      const goToday = stress
+        ? round2(2 * o.goLegPts * 1.7 * (1 - 0.15))
+        : round2(2 * o.goLegPts * (1 - o.calDiscount));
+
+      spPerp.push(perp); spQuart.push(quart);
+      spRaw.push(raw); lastRaw.push(last);
+      fairBasis.push(fair); cleanSpread.push(round2(raw - fair));
+      swapPaid.push(dailySwap); swapExtraDay.push(extraFlow);
+      carryDays.push(cDays); isWeekend.push(wknd);
+      isDivDay.push(divToday > 0); divGapArr.push(divToday);
+      inStress.push(stress); reqGo.push(goToday);
+    }
+    return {
+      spPerp, spQuart, spRaw, lastRaw, fairBasis, cleanSpread,
+      swapPaid, swapExtraDay, carryDays, isWeekend, isDivDay, divGapArr, inStress, reqGo, opts: o
+    };
+  }
+
+  const MOEX_SCENARIOS = [
+    { id: 'swap_trap', name: 'Рост ставки и SwapRate вечного фьючерса', opts: { rate0: 0.08, rateEnd: 0.34, swapExtra: 0.14, eveningNoiseProb: 0.10, eveningSpike: 2.2 }, note: 'Ставка растёт: контанго квартального фьючерса к вечному расширяется с +7 до +31 п., а повышенный SwapRate ежедневно списывается с покупателей вечного фьючерса (в понедельник — втройне за выходные).' },
+    { id: 'div_gap', name: 'Дивидендные отсечки (дни 70, 155, 240)', opts: { rate0: 0.10, rateEnd: 0.10, swapExtra: 0.02, divs: [{ exDay: 70, gap: 15 }, { exDay: 155, gap: 16 }, { exDay: 240, gap: 15 }], eveningNoiseProb: 0.10, eveningSpike: 2.0 }, note: 'По мере приближения отсечки будущий дивиденд закладывается в цену квартального контракта: сырой спред кажется «дешёвым», а в день отсечки делает ступеньку вверх.' },
+    { id: 'thin_evening', name: 'Прострелы вечерней сессии и леггирование', opts: { rate0: 0.10, rateEnd: 0.10, swapExtra: 0.02, eveningNoiseProb: 0.42, eveningSpike: 5.6 }, note: 'В 23:49 одиночные сделки в пустом стакане отскакивают от расчётной цены клиринга SP и дают ложные входы, а ручной сбор двух ног теряет на спредах стакана.' },
+    { id: 'stress_go', name: 'Шторм и сжатие скидки на ГО (дни 150–215)', opts: { rate0: 0.10, rateEnd: 0.10, swapExtra: 0.02, stressSpan: [150, 215], eveningNoiseProb: 0.18, eveningSpike: 3.2 }, note: 'В разгар шторма стакан спреда редеет, а клиринг поднимает базовое ГО и режет скидку с 72% до 15%: залог взлетает с 50 до 260 п., вызывая маржин-коллы без запаса кэша.' }
+  ];
+  const genMoexScenario = (seed, scn) => genMoex(Object.assign({ seed }, scn.opts));
+
+  /* Симулятор микроструктуры MOEX:
+     moexMode = 'naive_last' — сигнал по шумным последним сделкам 23:49 без учёта переноса/дивидендов, ручное леггирование, капитал без стресс-буфера;
+     moexMode = 'raw_sp'     — сигнал по честному клирингу SP, но без вычитания переноса/дивидендов, ручное леггирование;
+     moexMode = 'clean_leg'  — сигнал очищен от переноса и дивидендов (cleanSpread), но ручное леггирование и спокойный запас ГО;
+     moexMode = 'moex_pro'   — очищенный сигнал по SP + нативный стакан спреда + полный стресс-запас под ГО. */
+  function backtestMoex(mx, params) {
+    const p = Object.assign({}, DEFAULTS, { moexMode: 'moex_pro', capitalPts: 135 }, params || {});
+    const sigSeries = p.moexMode === 'naive_last' ? mx.lastRaw
+      : p.moexMode === 'raw_sp' ? mx.spRaw
+      : mx.cleanSpread;
+    const st = rolling(sigSeries, p.n);
+    const len = sigSeries.length;
+    const useNative = p.moexMode === 'moex_pro';
+    const costScale = p.cost / 0.5;
+
+    const trades = [];
+    const equity = new Array(len).fill(0);
+    const pos = new Array(len).fill(0);
+    const signal = new Array(len).fill(null);
+    const executed = new Array(len).fill(null);
+    let cur = 0, entry = null, realized = 0, marginCalls = 0;
+
+    function openHalfFee(t) {
+      return 0.5 * decomposeCosts({ nativeBook: useNative, stressed: mx.inStress[t] }).total * costScale;
+    }
+
+    function curGross(e, t) {
+      const priceVm = e.dir * (mx.spRaw[t] - e.rawIn);
+      const divComp = -e.dir * e.divAcc;
+      return { priceVm, divComp, swapFlow: e.cumSwap, gross: priceVm + divComp + e.cumSwap };
+    }
+
+    function finishTrade(t, sigIdx, reason, forcedStress) {
+      const closeFee = 0.5 * decomposeCosts({ nativeBook: forcedStress ? false : useNative, stressed: forcedStress || mx.inStress[t] }).total * costScale;
+      const g = curGross(entry, t);
+      const totalFee = entry.openFee + closeFee;
+      trades.push({
+        dir: entry.dir, signalIn: entry.signalIdx, entryIdx: entry.execIdx, exitIdx: t, signalOut: sigIdx,
+        rawIn: entry.rawIn, rawOut: mx.spRaw[t],
+        cleanIn: entry.cleanIn, cleanOut: mx.cleanSpread[t],
+        entryZ: entry.z, exitZ: st.z[sigIdx],
+        priceVm: g.priceVm, divComp: g.divComp, swapFlow: g.swapFlow,
+        reason, gross: g.gross, cost: totalFee, net: g.gross - totalFee, bars: t - entry.execIdx
+      });
+      realized += g.gross - closeFee;
+      cur = 0; entry = null;
+      executed[t] = { type: 'close', reason };
+    }
+
+    for (let t = 0; t < len; t++) {
+      if (cur !== 0 && t > entry.execIdx) {
+        entry.cumSwap += cur * mx.swapExtraDay[t];
+        if (mx.isDivDay[t]) entry.divAcc += mx.divGapArr[t];
+      }
+
+      if (cur !== 0 && p.moexMode !== 'moex_pro') {
+        const gNow = curGross(entry, t).gross;
+        if (p.capitalPts + realized + gNow < mx.reqGo[t]) {
+          marginCalls++;
+          finishTrade(t, t, 'margin', true);
+        }
+      }
+
+      if (st.z[t] !== null) {
+        const held = cur !== 0 ? t - entry.execIdx : 0;
+        const act = decide(cur, st.z[t], held, p);
+        if (act) {
+          signal[t] = act;
+          if (act.type === 'open') {
+            const hf = openHalfFee(t);
+            cur = act.dir;
+            entry = {
+              dir: act.dir, execIdx: t, signalIdx: t,
+              rawIn: mx.spRaw[t], cleanIn: mx.cleanSpread[t],
+              z: st.z[t], cumSwap: 0, divAcc: 0, openFee: hf
+            };
+            realized -= hf;
+            executed[t] = act;
+          } else if (cur !== 0) {
+            finishTrade(t, t, act.reason, false);
+          }
+        }
+      }
+      pos[t] = cur;
+      equity[t] = realized + (cur !== 0 ? curGross(entry, t).gross : 0);
+    }
+    if (cur !== 0) {
+      const last = len - 1;
+      finishTrade(last, last, 'end', false);
+      pos[last] = 0;
+      equity[last] = realized;
+    }
+
+    const m = metrics(trades, equity, pos);
+    const rom = calcRoM(m.total, mx.opts.goLegPts, mx.opts.calDiscount, 1.7, 0.15);
+    return {
+      params: p, trades, equity, pos, signal, executed, marginCalls, rom,
+      sigSeries, mean: st.mean, std: st.std, z: st.z, metrics: m
+    };
+  }
+
+  function explainMoex(mx, n, t, opts) {
+    if (t < n - 1) return null;
+    const o = Object.assign({ moexMode: 'moex_pro' }, opts || {});
+    const sigSeries = o.moexMode === 'naive_last' ? mx.lastRaw
+      : o.moexMode === 'raw_sp' ? mx.spRaw
+      : mx.cleanSpread;
+    const ex = explainBar(sigSeries, n, t);
+    return Object.assign({
+      spPerp: mx.spPerp[t], spQuart: mx.spQuart[t],
+      spRaw: mx.spRaw[t], lastRaw: mx.lastRaw[t],
+      fairBasis: mx.fairBasis[t], cleanSpread: mx.cleanSpread[t],
+      swapPaid: mx.swapPaid[t], carryDays: mx.carryDays[t],
+      isWeekend: mx.isWeekend[t], isDivDay: mx.isDivDay[t],
+      inStress: mx.inStress[t], reqGo: mx.reqGo[t]
+    }, ex);
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
