@@ -1307,7 +1307,359 @@
     }, ex);
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  /* ---------- Корзины из 3+ инструментов (#43, #38) ---------- */
+  /* Множественная линейная регрессия y ≈ c + w₁·x₁ + … + wₘ·xₘ методом наименьших квадратов
+     (исключение Гаусса с выбором главного элемента, без внешних библиотек). */
+  function olsMulti(y, xs) {
+    const m = xs.length, n = y.length, p = m + 1;
+    if (n < p + 1) return null;
+    const G = Array.from({ length: p }, () => new Array(p + 1).fill(0));
+    let my = 0;
+    for (let t = 0; t < n; t++) my += y[t];
+    my /= n;
+
+    for (let t = 0; t < n; t++) {
+      const row = [1];
+      for (let j = 0; j < m; j++) row.push(xs[j][t]);
+      const yt = y[t];
+      for (let r = 0; r < p; r++) {
+        const vr = row[r];
+        for (let c = r; c < p; c++) G[r][c] += vr * row[c];
+        G[r][p] += vr * yt;
+      }
+    }
+    for (let r = 0; r < p; r++) for (let c = 0; c < r; c++) G[r][c] = G[c][r];
+    for (let r = 1; r < p; r++) G[r][r] += 1e-10;
+
+    for (let col = 0; col < p; col++) {
+      let piv = col;
+      for (let r = col + 1; r < p; r++) if (Math.abs(G[r][col]) > Math.abs(G[piv][col])) piv = r;
+      if (Math.abs(G[piv][col]) < 1e-12) return null;
+      if (piv !== col) { const tmp = G[col]; G[col] = G[piv]; G[piv] = tmp; }
+      const div = G[col][col];
+      for (let c = col; c <= p; c++) G[col][c] /= div;
+      for (let r = 0; r < p; r++) {
+        if (r === col) continue;
+        const factor = G[r][col];
+        for (let c = col; c <= p; c++) G[r][c] -= factor * G[col][c];
+      }
+    }
+
+    const c0 = G[0][p];
+    const weights = [];
+    for (let j = 0; j < m; j++) weights.push(G[j + 1][p]);
+
+    let ssr = 0, sst = 0;
+    const resid = new Array(n);
+    for (let t = 0; t < n; t++) {
+      let hat = c0;
+      for (let j = 0; j < m; j++) hat += weights[j] * xs[j][t];
+      const e = y[t] - hat;
+      resid[t] = e;
+      ssr += e * e;
+      const dy = y[t] - my;
+      sst += dy * dy;
+    }
+    const r2 = sst > 1e-12 ? Math.max(0, 1 - ssr / sst) : 0;
+    return { c: c0, weights, resid, r2, ssr };
+  }
+
+  /* Критические 5%-пороги Маккиннона для остатков регрессии из totalLegs инструментов (2..10):
+     чем больше ног участвовало в подборе весов, тем строже (левее) должен быть порог τ. */
+  function basketCrit(totalLegs, n) {
+    const table = { 2: -3.34, 3: -3.74, 4: -4.10, 5: -4.42, 6: -4.71 };
+    const asymp = table[totalLegs] !== undefined ? table[totalLegs] : -4.71 - 0.27 * (totalLegs - 6);
+    const finAdj = n ? -4.5 / Math.max(20, n) : 0;
+    return round2(asymp + finAdj);
+  }
+
+  /* Подбор целых лотов [qA, q1, q2, ...] для корзины A − w₁·X₁ − w₂·X₂ − …, где 1 ≤ qA ≤ maxA. */
+  function roundBasketLots(weights, maxA) {
+    const lim = maxA || 10;
+    let best = null;
+    for (let qA = 1; qA <= lim; qA++) {
+      const qs = weights.map((w) => Math.round(w * qA));
+      let maxErr = 0, sumLots = qA;
+      for (let j = 0; j < weights.length; j++) {
+        const approx = qs[j] / qA;
+        maxErr = Math.max(maxErr, Math.abs(approx - weights[j]));
+        sumLots += Math.abs(qs[j]);
+      }
+      const score = maxErr + 0.002 * qA;
+      if (!best || score < best.score) {
+        best = { qA, qs, approx: qs.map((q) => q / qA), maxErr, totalLots: sumLots, score };
+      }
+    }
+    return best;
+  }
+
+  /* Генератор корзины из 3 основных инструментов (A, B, C) + пул независимых блужданий extras (для демонстрации переобучения на M = 2..10 ногах). */
+  function genBasket(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320,
+      twoFactor: false, f2Step: 0.15, f2Drift: 0,
+      wTrue: [0.5, 0.5],
+      reversion: 0.28, noise: 1.5,
+      shockBAt: null, shockBSize: 0,
+      pureNoise: false, rwStep: 1.85, extraWalks: 7
+    }, opts || {});
+    const rng = mulberry32(o.seed * 41 + 19);
+    const gauss = makeGauss(rng);
+
+    const a = [], b = [], c = [], trueSpread = [];
+    let f1 = 100, f2 = 0, ib = 0, ic = 0, u = 0;
+    let rwA = 100, rwB = 100, rwC = 100;
+
+    for (let t = 0; t < o.n; t++) {
+      if (o.pureNoise) {
+        if (t > 0) {
+          rwA = Math.max(20, rwA + o.rwStep * gauss());
+          rwB = Math.max(20, rwB + o.rwStep * gauss());
+          rwC = Math.max(20, rwC + o.rwStep * gauss());
+        }
+        a.push(round2(rwA)); b.push(round2(rwB)); c.push(round2(rwC));
+        trueSpread.push(round2(rwA - 0.5 * rwB - 0.5 * rwC));
+        continue;
+      }
+
+      if (t > 0) {
+        f1 = Math.max(35, f1 + 1.25 * gauss());
+        f2 = f2 + (o.twoFactor ? o.f2Drift + o.f2Step * gauss() : 0.12 * gauss());
+        ib = 0.7 * ib + 0.55 * gauss();
+        ic = 0.7 * ic + 0.55 * gauss();
+      }
+      const bShock = o.shockBAt !== null && t >= o.shockBAt ? o.shockBSize * Math.min(1, (t - o.shockBAt + 1) / 8) : 0;
+      const bt = o.twoFactor ? (f1 + 0.9 * f2 + ib) : (f1 + ib + bShock);
+      const ct = o.twoFactor ? (f1 - 0.9 * f2 + ic) : (f1 + ic);
+
+      u += -o.reversion * u + o.noise * gauss();
+      const fairA = o.shockBAt !== null
+        ? (10 + f1)
+        : (10 + o.wTrue[0] * bt + o.wTrue[1] * ct);
+      const at = fairA + u;
+
+      a.push(round2(at)); b.push(round2(bt)); c.push(round2(ct));
+      trueSpread.push(round2(u));
+    }
+
+    const extras = [];
+    for (let j = 0; j < o.extraWalks; j++) {
+      const arr = [];
+      let v = 100;
+      for (let t = 0; t < o.n; t++) {
+        if (t > 0) v = Math.max(20, v + o.rwStep * gauss());
+        arr.push(round2(v));
+      }
+      extras.push(arr);
+    }
+    return { a, b, c, trueSpread, extras, opts: o };
+  }
+
+  const BASKET_SCENARIOS = [
+    { id: 'twofactor', name: 'Два общих ветра (веса 1,2 и 0,6)', opts: { twoFactor: true, f2Step: 2.1, f2Drift: 0.32, wTrue: [1.2, 0.6], reversion: 0.30, noise: 1.5 }, note: 'Рынок двигают сразу два независимых фактора с весами 1,2·B + 0,6·C. Пара A − k·B гасит только один ветер, равные веса 0,5/0,5 ошибаются в масштабе, а регрессия 3 ног гасит оба.' },
+    { id: 'known', name: 'Известная пропорция 0,5·B + 0,5·C', opts: { twoFactor: true, f2Step: 1.15, wTrue: [0.5, 0.5], reversion: 0.16, noise: 2.35 }, note: 'Истинные веса заданы экономикой или технологией (0,5 и 0,5). Готовая формула не тратит точность на переоценку двух наклонов по зашумлённому окну.' },
+    { id: 'idioshock', name: 'Обвал одной бумаги B на 155-м дне', opts: { twoFactor: false, wTrue: [0.5, 0.5], shockBAt: 155, shockBSize: -36, reversion: 0.28, noise: 1.5 }, note: 'До 155-го дня B и C оба ходят за отраслью, а затем у компании B выходит тяжёлая собственная новость (−36 п.). Пара A − k·B ловит весь удар, тогда как корзина опирается на C.' },
+    { id: 'noise', name: 'Ложная корзина (3 случайных блуждания)', opts: { pureNoise: true, rwStep: 1.95 }, note: 'Три полностью независимых случайных блуждания. Скользящая регрессия без поправки Маккиннона лепит «красивые» веса из чистого шума и теряет деньги.' }
+  ];
+  const genBasketScenario = (seed, scn) => genBasket(Object.assign({ seed }, scn.opts));
+
+  /* Симулятор корзины:
+     basketMode = 'pair'      — обычная пара A − k·B (оценка k по окну regN, 2 ноги, комиссия = cost);
+     basketMode = 'fixed'     — фиксированная корзина A − w₁·B − w₂·C с заданными весами fixedW (3 ноги, комиссия = cost * legFeeMult);
+     basketMode = 'ols'       — скользящая множественная регрессия A − w₁·B − w₂·C по окну regN (веса замораживаются на время сделки);
+     basketMode = 'ols_coint' — то же, но вход разрешён только при прохождении ужесточённого порога Маккиннона для 3 ног. */
+  function backtestBasket(bkData, params) {
+    const p = Object.assign({}, DEFAULTS, {
+      basketMode: 'ols', regN: 75, fixedW: [0.5, 0.5], legFeeMult: 1.35
+    }, params || {});
+    const len = bkData.a.length;
+    const w1Arr = new Array(len).fill(null), w2Arr = new Array(len).fill(null), cArr = new Array(len).fill(0);
+    const tauArr = new Array(len).fill(null), passArr = new Array(len).fill(true);
+    const sigSeries = new Array(len).fill(null);
+    const crit3 = basketCrit(3, p.regN);
+
+    for (let t = p.regN - 1; t < len; t++) {
+      if (p.basketMode === 'pair') {
+        const subY = bkData.a.slice(t - p.regN + 1, t + 1);
+        const subB = bkData.b.slice(t - p.regN + 1, t + 1);
+        const fit = olsMulti(subY, [subB]);
+        w1Arr[t] = fit ? fit.weights[0] : 1; w2Arr[t] = 0; cArr[t] = fit ? fit.c : 0;
+        const df = fit ? dfTest(fit.resid) : null;
+        tauArr[t] = df ? df.tau : null;
+      } else if (p.basketMode === 'fixed') {
+        w1Arr[t] = p.fixedW[0]; w2Arr[t] = p.fixedW[1]; cArr[t] = 0;
+      } else {
+        const subY = bkData.a.slice(t - p.regN + 1, t + 1);
+        const subB = bkData.b.slice(t - p.regN + 1, t + 1);
+        const subC = bkData.c.slice(t - p.regN + 1, t + 1);
+        const fit = olsMulti(subY, [subB, subC]);
+        if (fit) {
+          w1Arr[t] = fit.weights[0]; w2Arr[t] = fit.weights[1]; cArr[t] = fit.c;
+          const df = dfTest(fit.resid);
+          tauArr[t] = df ? df.tau : null;
+          if (p.basketMode === 'ols_coint') passArr[t] = df !== null && df.tau <= crit3;
+        }
+      }
+    }
+
+    const mean = new Array(len).fill(null), std = new Array(len).fill(null), z = new Array(len).fill(null);
+    const startAt = Math.max(p.regN - 1, p.n - 1);
+    for (let t = startAt; t < len; t++) {
+      const w1 = w1Arr[t], w2 = w2Arr[t];
+      if (w1 === null) continue;
+      let s = 0;
+      const vals = [];
+      for (let k = t - p.n + 1; k <= t; k++) {
+        const v = bkData.a[k] - w1 * bkData.b[k] - w2 * bkData.c[k];
+        vals.push(v); s += v;
+      }
+      const m = s / p.n;
+      let sq = 0;
+      for (let k = 0; k < vals.length; k++) { const d = vals[k] - m; sq += d * d; }
+      const sd = Math.sqrt(sq / p.n);
+      mean[t] = m; std[t] = sd;
+      sigSeries[t] = vals[vals.length - 1];
+      z[t] = sd > 1e-9 ? (vals[vals.length - 1] - m) / sd : null;
+    }
+
+    const fee = p.basketMode === 'pair' ? p.cost : p.cost * p.legFeeMult;
+    const trades = [];
+    const equity = new Array(len).fill(0);
+    const pos = new Array(len).fill(0);
+    const signal = new Array(len).fill(null);
+    const executed = new Array(len).fill(null);
+    let cur = 0, entry = null, realized = 0, pending = null;
+
+    function legsPnl(e, t) {
+      const dA = e.dir * (bkData.a[t] - e.aIn);
+      const dB = -e.dir * e.w1 * (bkData.b[t] - e.bIn);
+      const dC = -e.dir * e.w2 * (bkData.c[t] - e.cIn);
+      return { dA, dB, dC, gross: dA + dB + dC };
+    }
+
+    function openAt(act, t, sigIdx) {
+      cur = act.dir;
+      entry = {
+        dir: act.dir, execIdx: t, signalIdx: sigIdx,
+        w1: w1Arr[sigIdx], w2: w2Arr[sigIdx],
+        aIn: bkData.a[t], bIn: bkData.b[t], cIn: bkData.c[t],
+        entryS: bkData.a[t] - w1Arr[sigIdx] * bkData.b[t] - w2Arr[sigIdx] * bkData.c[t],
+        z: z[sigIdx], tauIn: tauArr[sigIdx]
+      };
+      realized -= fee;
+      executed[t] = act;
+    }
+
+    function closeAt(act, t, sigIdx) {
+      const lg = legsPnl(entry, t);
+      const exitS = bkData.a[t] - entry.w1 * bkData.b[t] - entry.w2 * bkData.c[t];
+      trades.push({
+        dir: entry.dir, signalIn: entry.signalIdx, entryIdx: entry.execIdx, exitIdx: t, signalOut: sigIdx,
+        w1: entry.w1, w2: entry.w2,
+        aIn: entry.aIn, aOut: bkData.a[t], bIn: entry.bIn, bOut: bkData.b[t], cIn: entry.cIn, cOut: bkData.c[t],
+        entryS: entry.entryS, exitS, entryZ: entry.z, exitZ: z[sigIdx], tauIn: entry.tauIn,
+        pnlA: lg.dA, pnlB: lg.dB, pnlC: lg.dC,
+        reason: act.reason, gross: lg.gross, cost: fee, net: lg.gross - fee, bars: t - entry.execIdx
+      });
+      realized += lg.gross;
+      cur = 0; entry = null;
+      executed[t] = act;
+    }
+
+    for (let t = 0; t < len; t++) {
+      if (pending) {
+        if (pending.act.type === 'open') openAt(pending.act, t, pending.signalIdx);
+        else if (cur !== 0) closeAt(pending.act, t, pending.signalIdx);
+        pending = null;
+      }
+      if (z[t] !== null) {
+        const held = cur !== 0 ? t - entry.execIdx : 0;
+        let act = decide(cur, z[t], held, p);
+        if (act && act.type === 'open' && p.basketMode === 'ols_coint' && !passArr[t]) act = null;
+        if (act) {
+          signal[t] = act;
+          if (p.delay === 0) {
+            if (act.type === 'open') openAt(act, t, t);
+            else closeAt(act, t, t);
+          } else if (t < len - 1) {
+            pending = { act, signalIdx: t };
+          }
+        }
+      }
+      pos[t] = cur;
+      equity[t] = realized + (cur !== 0 ? legsPnl(entry, t).gross : 0);
+    }
+    if (cur !== 0) {
+      const last = len - 1;
+      closeAt({ type: 'close', reason: 'end' }, last, last);
+      pos[last] = 0;
+      equity[last] = realized;
+    }
+
+    return {
+      params: p, trades, equity, pos, signal, executed,
+      sigSeries, w1: w1Arr, w2: w2Arr, c0: cArr, tau: tauArr, pass: passArr, crit3,
+      mean, std, z, metrics: metrics(trades, equity, pos)
+    };
+  }
+
+  function explainBasket(bkData, regN, n, t, opts) {
+    const o = Object.assign({ basketMode: 'ols', fixedW: [0.5, 0.5] }, opts || {});
+    const startAt = Math.max(regN - 1, n - 1);
+    if (t < startAt) return null;
+
+    let w1, w2, c0 = 0, r2 = null, tau = null;
+    const subY = bkData.a.slice(t - regN + 1, t + 1);
+    const subB = bkData.b.slice(t - regN + 1, t + 1);
+    const subC = bkData.c.slice(t - regN + 1, t + 1);
+
+    let mA = 0, mB = 0, mC = 0;
+    for (let i = 0; i < regN; i++) { mA += subY[i]; mB += subB[i]; mC += subC[i]; }
+    mA /= regN; mB /= regN; mC /= regN;
+    let sBB = 0, sCC = 0, sBC = 0, sBA = 0, sCA = 0;
+    for (let i = 0; i < regN; i++) {
+      const da = subY[i] - mA, db = subB[i] - mB, dc = subC[i] - mC;
+      sBB += db * db; sCC += dc * dc; sBC += db * dc; sBA += db * da; sCA += dc * da;
+    }
+
+    if (o.basketMode === 'pair') {
+      const fit = olsMulti(subY, [subB]);
+      w1 = fit ? fit.weights[0] : 1; w2 = 0; c0 = fit ? fit.c : 0; r2 = fit ? fit.r2 : null;
+      const df = fit ? dfTest(fit.resid) : null;
+      tau = df ? df.tau : null;
+    } else if (o.basketMode === 'fixed') {
+      w1 = o.fixedW[0]; w2 = o.fixedW[1]; c0 = 0;
+    } else {
+      const fit = olsMulti(subY, [subB, subC]);
+      w1 = fit ? fit.weights[0] : 0.5; w2 = fit ? fit.weights[1] : 0.5;
+      c0 = fit ? fit.c : 0; r2 = fit ? fit.r2 : null;
+      const df = fit ? dfTest(fit.resid) : null;
+      tau = df ? df.tau : null;
+    }
+
+    const crit = basketCrit(o.basketMode === 'pair' ? 2 : 3, regN);
+    const rows = [];
+    let sum = 0;
+    for (let k = t - n + 1; k <= t; k++) {
+      const val = bkData.a[k] - w1 * bkData.b[k] - w2 * bkData.c[k];
+      rows.push({ idx: k, a: bkData.a[k], b: bkData.b[k], c: bkData.c[k], value: val });
+      sum += val;
+    }
+    const mean = sum / n;
+    let sumSq = 0;
+    rows.forEach((r) => { r.dev = r.value - mean; r.sq = r.dev * r.dev; sumSq += r.sq; });
+    const variance = sumSq / n;
+    const std = Math.sqrt(variance);
+    const value = rows[rows.length - 1].value;
+    return {
+      a: bkData.a[t], b: bkData.b[t], c: bkData.c[t],
+      w1, w2, c0, r2, tau, crit, pass: tau !== null ? tau <= crit : true,
+      mA, mB, mC, sBB, sCC, sBC, sBA, sCA,
+      rows, sum, mean, sumSq, variance, std, value, z: std > 1e-9 ? (value - mean) / std : null
+    };
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

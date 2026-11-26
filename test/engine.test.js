@@ -529,4 +529,56 @@ for (const sc of E.FX_SCENARIOS) {
   console.log('межбиржевой FX, «' + sc.name + '»: 2 ноги без FX ' + nf.toFixed(0) + ', несинхр. ' + st.toFixed(0) + ', 3 ноги ' + hg.toFixed(0));
 }
 
+// 34. Корзины из 3+ инструментов (#43): множественная регрессия, лоты, пороги Маккиннона и отсутствие заглядывания в будущее.
+{
+  // Точное восстановление плоскости y = 5 + 2*x1 - 0.5*x2
+  const x1 = [10, 12, 15, 11, 18, 20];
+  const x2 = [8, 14, 10, 16, 12, 6];
+  const y = x1.map((v, i) => 5 + 2 * v - 0.5 * x2[i]);
+  const fit = E.olsMulti(y, [x1, x2]);
+  close(fit.c, 5, 1e-6);
+  close(fit.weights[0], 2, 1e-6);
+  close(fit.weights[1], -0.5, 1e-6);
+  close(fit.r2, 1, 1e-9);
+
+  // Пороги Маккиннона ужесточаются с ростом числа ног
+  assert(E.basketCrit(5, 80) < E.basketCrit(3, 80) && E.basketCrit(3, 80) < E.basketCrit(2, 80));
+
+  // Подбор целых лотов для пропорции крэка 2/3 и 1/3 -> [3, 2, 1]
+  const lots = E.roundBasketLots([2 / 3, 1 / 3], 6);
+  assert.strictEqual(lots.qA, 3);
+  assert.deepStrictEqual(lots.qs, [2, 1]);
+
+  // Сверка счёта сделок и отсутствие заглядывания в будущее
+  const bkD = E.genBasketScenario(7, E.BASKET_SCENARIOS[0]);
+  const cut = 185;
+  const sub = { a: bkD.a.slice(0, cut), b: bkD.b.slice(0, cut), c: bkD.c.slice(0, cut), trueSpread: bkD.trueSpread.slice(0, cut), extras: [] };
+  for (const mode of ['pair', 'fixed', 'ols', 'ols_coint']) {
+    const b1 = E.backtestBasket(bkD, { basketMode: mode });
+    close(b1.equity[b1.equity.length - 1], b1.metrics.total, 1e-6);
+    b1.trades.forEach((tr) => {
+      close(tr.gross, tr.pnlA + tr.pnlB + tr.pnlC, 1e-9);
+      close(tr.gross, tr.dir * (tr.exitS - tr.entryS), 1e-9);
+    });
+    const b2 = E.backtestBasket(sub, { basketMode: mode });
+    for (let i = 0; i < cut - 1; i++) {
+      assert.strictEqual(b1.pos[i], b2.pos[i]);
+      close(b1.equity[i], b2.equity[i], 1e-9);
+    }
+  }
+}
+
+// 35. Сводка по корзинам из 3+ инструментов (смотрим глазами).
+for (const sc of E.BASKET_SCENARIOS) {
+  let pr = 0, fx = 0, ol = 0, oc = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const d = E.genBasketScenario(sd, sc);
+    pr += E.backtestBasket(d, { basketMode: 'pair' }).metrics.total;
+    fx += E.backtestBasket(d, { basketMode: 'fixed' }).metrics.total;
+    ol += E.backtestBasket(d, { basketMode: 'ols' }).metrics.total;
+    oc += E.backtestBasket(d, { basketMode: 'ols_coint' }).metrics.total;
+  });
+  console.log('корзины 3+, «' + sc.name + '»: пара ' + pr.toFixed(0) + ', фикс ' + fx.toFixed(0) + ', OLS ' + ol.toFixed(0) + ', OLS+Маккиннон ' + oc.toFixed(0));
+}
+
 console.log('OK: все проверки пройдены');
