@@ -204,6 +204,9 @@
     return { cls: '', html: h };
   }
 
+  A.decisionText = decisionText;
+  A.zLines = zLines;
+
   Z.push({
     id: 'walk',
     title: 'Пошаговый разбор: один день изнутри',

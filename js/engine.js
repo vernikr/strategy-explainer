@@ -242,6 +242,14 @@
     return windows.map((n) => entries.map((e) => backtest(series, tune(base, n, e)).metrics.total));
   }
 
+  // Учебный сценарий «редкие выбросы»: детерминированно добавляет одиночные всплески в случайные дни.
+  function spiky(series, seed, prob, lo, hi) {
+    const r = mulberry32(seed * 7 + 1), d = series.slice();
+    const p = prob === undefined ? 0.03 : prob, a = lo === undefined ? 25 : lo, b = hi === undefined ? 40 : hi;
+    for (let i = 40; i < d.length; i++) if (r() < p) d[i] += (r() < 0.5 ? 1 : -1) * (a + r() * (b - a));
+    return d;
+  }
+
   // Приближение функции ошибок (Абрамовиц–Стиган 7.1.26), точность порядка 1e-7.
   function erf(x) {
     const s = x < 0 ? -1 : 1;
@@ -253,7 +261,7 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, rolling, ewma, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const api = { generate, rolling, ewma, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

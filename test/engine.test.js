@@ -104,6 +104,15 @@ for (const n of [5, 20, 60]) {
   assert.ok(dropW > 1 && dropE < dropW / 3, `окно ${dropW}, ewma ${dropE}`);
 }
 
+// 13. Сценарий выбросов детерминирован и меняет только малую долю дней.
+{
+  const a = E.spiky(g.spread, 5), b = E.spiky(g.spread, 5);
+  assert.deepStrictEqual(a, b);
+  const changed2 = a.filter((v, i) => v !== g.spread[i]).length;
+  assert.ok(changed2 > 3 && changed2 < 30, 'изменено дней: ' + changed2);
+  assert.deepStrictEqual(a.slice(0, 40), g.spread.slice(0, 40));
+}
+
 // 8. Сводка по учебным данным (смотрим глазами, что сделок достаточно).
 for (const seed of [7, 11]) {
   const m = E.backtest(E.generate({ seed }).spread, {}).metrics;
