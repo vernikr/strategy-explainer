@@ -123,7 +123,45 @@
     return { alpha, halfLife: halfLife(n), rows, earlier, earlierShare: earlier.w / W, W, Wx, mean, Wsq, variance, std, value: series[t], z: std > 1e-9 ? (series[t] - mean) / std : null };
   }
 
-  const stats = (series, n, mode) => (mode === 'ewma' ? ewma(series, n) : rolling(series, n));
+  /* Робастный вариант: вместо среднего и σ берутся медиана и медианное абсолютное отклонение (MAD).
+     MAD = медиана значений |x − медиана|. Чтобы MAD можно было читать как «сигму», его умножают на 1,4826:
+     для нормального распределения это число делает MAD равным σ. */
+  const MAD_SCALE = 1.4826;
+  const median = (arr) => {
+    const a = arr.slice().sort((x, y) => x - y), m = a.length >> 1;
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  };
+
+  function robust(series, n) {
+    const len = series.length;
+    const mean = new Array(len).fill(null);
+    const std = new Array(len).fill(null);
+    const z = new Array(len).fill(null);
+    for (let t = n - 1; t < len; t++) {
+      const win = series.slice(t - n + 1, t + 1);
+      const med = median(win);
+      const sd = MAD_SCALE * median(win.map((v) => Math.abs(v - med)));
+      mean[t] = med; std[t] = sd;
+      z[t] = sd > 1e-9 ? (series[t] - med) / sd : null;
+    }
+    return { mean, std, z };
+  }
+
+  // Все промежуточные числа робастного расчёта для одного дня (для пошагового разбора).
+  function explainRobust(series, n, t) {
+    if (t < n - 1) return null;
+    const rows = [];
+    for (let k = t - n + 1; k <= t; k++) rows.push({ idx: k, value: series[k] });
+    const sorted = rows.map((r) => r.value).sort((a, b) => a - b);
+    const med = median(sorted);
+    rows.forEach((r) => { r.dev = r.value - med; r.abs = Math.abs(r.dev); });
+    const absSorted = rows.map((r) => r.abs).sort((a, b) => a - b);
+    const mad = median(absSorted);
+    const std = MAD_SCALE * mad;
+    return { rows, sorted, median: med, absSorted, mad, std, value: series[t], z: std > 1e-9 ? (series[t] - med) / std : null, even: n % 2 === 0 };
+  }
+
+  const stats = (series, n, mode) => (mode === 'ewma' ? ewma(series, n) : mode === 'robust' ? robust(series, n) : rolling(series, n));
 
   /* Все промежуточные числа для одного дня: то, что показывает экран «Пошаговый разбор». */
   function explainBar(series, n, t) {
@@ -261,7 +299,7 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, rolling, ewma, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const api = { generate, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

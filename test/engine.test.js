@@ -113,6 +113,53 @@ for (const n of [5, 20, 60]) {
   assert.deepStrictEqual(a.slice(0, 40), g.spread.slice(0, 40));
 }
 
+// 14. Робастный z: ручной пример [1, 2, 3, 4, 100], N = 5.
+{
+  const x = [1, 2, 3, 4, 100];
+  const r = E.robust(x, 5);
+  close(r.mean[4], 3);                    // медиана
+  close(r.std[4], 1.4826 * 1);            // отклонения 2, 1, 0, 1, 97 → по порядку 0, 1, 1, 2, 97 → MAD = 1
+  close(r.z[4], 97 / 1.4826);
+  // обычные среднее и σ на тех же числах «обмануты» выбросом
+  const cl = E.rolling(x, 5);
+  close(cl.mean[4], 22);
+  assert.ok(cl.z[4] < 2.1 && r.z[4] > 60, `классический z ${cl.z[4]}, робастный ${r.z[4]}`);
+  close(E.median([4, 1, 3, 2]), 2.5);     // чётное число значений: среднее двух средних
+  close(E.median([5]), 5);
+}
+
+// 15. Робастный z: пошаговый разбор совпадает с расчётом, нет заглядывания в будущее, бэктест согласован.
+{
+  for (const n of [5, 20, 31]) {
+    const r = E.robust(g.spread, n);
+    for (const t of [n - 1, 120, 319]) {
+      const ex = E.explainRobust(g.spread, n, t);
+      close(ex.median, r.mean[t]); close(ex.std, r.std[t]); close(ex.z, r.z[t]);
+      assert.strictEqual(ex.sorted.length, n);
+    }
+  }
+  const a = E.robust(g.spread, 20), b = E.robust(changed, 20);
+  for (let t = 0; t <= t0; t++) close(a.z[t], b.z[t], 1e-12);
+  assert.strictEqual(a.z[18], null);
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const d = E.generate({ seed });
+    for (const delay of [0, 1]) {
+      const res = E.backtest(d.spread, { mode: 'robust', delay, maxHold: 15 });
+      close(res.equity[res.equity.length - 1], res.metrics.total, 1e-6);
+      res.trades.forEach((q) => close(q.net, q.dir * (q.exitS - q.entryS) - q.cost, 1e-9));
+    }
+  }
+}
+
+// 16. Один выброс почти не меняет робастную σ, а обычную раздувает.
+{
+  const clean = g.spread.slice(0, 200), spiked = clean.slice(); spiked[150] += 60;
+  const c = E.robust(clean, 30), sp = E.robust(spiked, 30), c0 = E.rolling(clean, 30), s0 = E.rolling(spiked, 30);
+  const robustJump = Math.max(...[150, 160, 170, 179].map((t) => Math.abs(sp.std[t] - c.std[t])));
+  const plainJump = Math.max(...[150, 160, 170, 179].map((t) => s0.std[t] - c0.std[t]));
+  assert.ok(plainJump > 4 * robustJump + 3, `обычная +${plainJump}, робастная +${robustJump}`);
+}
+
 // 8. Сводка по учебным данным (смотрим глазами, что сделок достаточно).
 for (const seed of [7, 11]) {
   const m = E.backtest(E.generate({ seed }).spread, {}).metrics;
