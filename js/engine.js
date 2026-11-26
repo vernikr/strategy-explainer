@@ -102,8 +102,8 @@
   }
 
   // Прямая формула (медленная, по всей истории): для сверки с рекурсией и для пошагового разбора.
-  function explainEwma(series, n, t, shown) {
-    if (t < n - 1) return null;
+  function explainEwma(series, n, t, shown, force) {
+    if (t < n - 1 && !force) return null;
     const alpha = alphaOf(n), q = 1 - alpha;
     let W = 0, Wx = 0;
     for (let k = 0; k <= t; k++) { const w = Math.pow(q, k); W += w; Wx += w * series[t - k]; }

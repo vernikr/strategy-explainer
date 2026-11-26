@@ -107,7 +107,7 @@
     // подписи оси X
     g.textAlign = 'center';
     const xt = niceTicks(m.x0, m.x1, 8);
-    xt.forEach((t) => { if (t >= m.x0 && t <= m.x1) g.fillText(String(Math.round(t) + 1), this.xs(t), H - 10); });
+    xt.forEach((t) => { if (t >= m.x0 && t <= m.x1) g.fillText(o.xfmt ? o.xfmt(Math.round(t)) : String(Math.round(t) + 1), this.xs(t), H - 10); });
 
     m.bands.forEach((b) => {
       g.fillStyle = b.color;
