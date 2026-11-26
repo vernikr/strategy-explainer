@@ -374,4 +374,57 @@ for (const sc of E.COINT_SCENARIOS) {
   console.log('коинтеграция, «' + sc.name + '»: без фильтра ' + no.toFixed(0) + ', отбор ' + pr.toFixed(0) + ', скользящий ' + rl.toFixed(0));
 }
 
+// 27. Календарный спред: ручная проверка формулы стоимости переноса (carryFair).
+// Спот = 1000, ставка r = 15%, хранение u = 5%, выгода владения y = 0%, разница сроков = 73 дня (ровно 0,2 года):
+// 1000 × (0,15 + 0,05 − 0) × 0,2 = +40 пунктов (контанго). При дефиците y = 25% → −10 пунктов (бэквордация).
+{
+  close(E.carryFair(1000, 0.15, 0.05, 0, 73), 40);
+  close(E.carryFair(1000, 0.15, 0.05, 0.25, 73), -10);
+  close(E.carryFair(1000, 0.12, 0.03, 0.15, 90), 0);
+}
+
+// 28. Календарный спред: бесшовная склейка без заглядывания в будущее и точное совпадение P&L по сериям при ролле.
+{
+  const c = E.genCalScenario(7, E.CAL_SCENARIOS[0]);
+  assert.strictEqual(c.raw.length, 320);
+  // Внутри одной серии изменение stitched за день равно изменению raw; на переходе через день ролла — изменению новой серии (raw[t] − nextRaw[t−1])
+  for (let t = 1; t < c.raw.length; t++) {
+    const expectedStep = c.isRoll[t - 1] ? c.raw[t] - c.nextRaw[t - 1] : c.raw[t] - c.raw[t - 1];
+    close(c.stitched[t] - c.stitched[t - 1], expectedStep, 1e-9);
+    close(c.far[t] - c.near[t], c.raw[t], 1e-9);
+  }
+  // Для каждой сделки с роллом валовая прибыль равна сумме прибылей отдельных серий в legs!
+  for (const mode of ['naive', 'close', 'roll']) {
+    for (const seasonal of [false, true]) {
+      const bt = E.backtestCalendar(c, { expiryMode: mode, seasonal, rollCost: 0.7 });
+      close(bt.equity[bt.equity.length - 1], bt.metrics.total, 1e-6);
+      bt.trades.forEach((tr) => {
+        const legSum = tr.legs.reduce((s, lg) => s + tr.dir * (lg.rawOut - lg.rawIn), 0);
+        close(tr.gross, legSum, 1e-6);
+        close(tr.net, tr.gross - (bt.params.cost + tr.rolls * 0.7), 1e-6);
+        if (mode === 'close') assert.strictEqual(tr.rolls, 0);
+      });
+    }
+  }
+  // explainCalendar совпадает с расчётом backtestCalendar и не заглядывает в будущее
+  const btR = E.backtestCalendar(c, { expiryMode: 'roll', seasonal: true, n: 30 });
+  for (const t of [29, 63, 128, 319]) {
+    const ex = E.explainCalendar(c, 30, t, { expiryMode: 'roll', seasonal: true });
+    close(ex.mean, btR.mean[t]); close(ex.std, btR.std[t]); close(ex.z, btR.z[t]);
+  }
+}
+
+// 29. Сводка по календарному спреду (смотрим глазами).
+for (const sc of E.CAL_SCENARIOS) {
+  let nv = 0, cl = 0, rl = 0, rs = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const c = E.genCalScenario(sd, sc);
+    nv += E.backtestCalendar(c, { expiryMode: 'naive', seasonal: false }).metrics.total;
+    cl += E.backtestCalendar(c, { expiryMode: 'close', seasonal: false }).metrics.total;
+    rl += E.backtestCalendar(c, { expiryMode: 'roll', seasonal: false }).metrics.total;
+    rs += E.backtestCalendar(c, { expiryMode: 'roll', seasonal: true }).metrics.total;
+  });
+  console.log('календарный, «' + sc.name + '»: наивная ' + nv.toFixed(0) + ', выход до эксп. ' + cl.toFixed(0) + ', ролл ' + rl.toFixed(0) + ', ролл+сезон ' + rs.toFixed(0));
+}
+
 console.log('OK: все проверки пройдены');

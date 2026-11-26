@@ -85,7 +85,7 @@
     return '<div class="kpis">' + items.map((i) => '<div class="kpi"><div class="v">' + i[0] + '</div><div class="l">' + i[1] + '</div>' + (i[2] && opts && opts.explain ? '<div class="e">' + i[2] + '</div>' : '') + '</div>').join('') + '</div>';
   }
 
-  const REASON = { entry: 'вход', target: 'цель (возврат к среднему)', stop: 'стоп-лосс', time: 'время вышло', end: 'конец данных' };
+  const REASON = { entry: 'вход', target: 'цель (возврат к среднему)', stop: 'стоп-лосс', time: 'время вышло', expiry: 'выход перед экспирацией', end: 'конец данных' };
   const posName = (p) => (p === 1 ? 'лонг спреда (купили A, продали B)' : p === -1 ? 'шорт спреда (продали A, купили B)' : 'вне рынка');
 
   function barTip(i, bt) {

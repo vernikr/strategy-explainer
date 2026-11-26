@@ -448,6 +448,222 @@
     return res;
   }
 
+  /* ---------- Календарный спред ---------- */
+  /* Теоретическая («справедливая») разница Дальний − Ближний по модели стоимости переноса:
+     Спот × (ставка r + хранение u − выгода владения y) × (разница сроков в днях ÷ 365).
+     Ставки r, u, y передаются в долях единицы (например, 0,16 = 16% годовых). */
+  function carryFair(spot, r, u, y, dtDays) {
+    return spot * (r + u - y) * (dtDays / 365);
+  }
+
+  const CAL_SERIES_NAMES = ['Март–Июнь', 'Июнь–Сент', 'Сент–Дек', 'Дек–Март', 'Март–Июнь+'];
+
+  /* Генератор цепочки календарных спредов (Дальний − Ближний) со сменой серий каждые cycleLen дней.
+     Уход из серии (ролл) происходит за rollDays дней до экспирации ближнего фьючерса.
+     В день ролла одновременно известны спред уходящей пары raw[t] и спред следующей пары nextRaw[t]:
+     их разница rollGap[t] = nextRaw[t] − raw[t] даёт честную бесшовную склейку stitched без заглядывания в будущее.
+     Сезонная норма seasonalNorm считается строго по 3 прошлым годам до начала теста (без будущего). */
+  function genCalendar(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320, cycleLen: 64, rollDays: 5, base: 1000,
+      steps: [8, 22, 6, 21, 9], seasonAmp: 0, abnormal: false,
+      squeezeAt: null, squeezeMag: -42, reversion: 0.18, noise: 2.1, spotStep: 4
+    }, opts || {});
+    const gauss = makeGauss(mulberry32(o.seed * 19 + 7));
+    const seasonAt = (t, flip) => (o.seasonAmp === 0 ? 0 : (flip ? -0.6 : 1) * o.seasonAmp * Math.sin((2 * Math.PI * t) / 160));
+
+    // Три предшествующих года для оценки сезонной нормы по календарному дню (без подглядывания в текущий год)
+    const histSum = new Array(o.n).fill(0);
+    for (let yr = 0; yr < 3; yr++) {
+      let d = 0;
+      for (let t = 0; t < o.n; t++) {
+        d += -o.reversion * d + o.noise * gauss();
+        histSum[t] += seasonAt(t, false) + d;
+      }
+    }
+    const seasonalNorm = histSum.map((v) => round2(v / 3));
+
+    const near = [], far = [], raw = [], stitched = [], cumShifts = [];
+    const seriesIdx = [], daysToExp = [], isRoll = [], nextRaw = [], rollGap = [];
+    let spot = o.base, dev = 0, cumShift = 0;
+    for (let t = 0; t < o.n; t++) {
+      const s = Math.floor(t / o.cycleLen);
+      const inCycle = t % o.cycleLen;
+      const dte = (o.cycleLen - 1 - inCycle) + o.rollDays;
+      const rollToday = inCycle === o.cycleLen - 1 && t < o.n - 1;
+      spot += o.spotStep * gauss();
+      const inSqz = o.squeezeAt !== null && t >= o.squeezeAt;
+      const rev = inSqz ? 0.04 : o.reversion;
+      dev += -rev * dev + o.noise * gauss();
+      const sqz = inSqz ? o.squeezeMag * Math.min(1, (t - o.squeezeAt + 1) / 22) : 0;
+      const lvl = o.steps[s % o.steps.length];
+      const seas = seasonAt(t, o.abnormal);
+      const sp = round2(lvl + seas + dev + sqz);
+      const pNear = round2(spot + lvl * 0.5 - sqz * 0.75);
+      const pFar = round2(pNear + sp);
+
+      near.push(pNear); far.push(pFar); raw.push(sp);
+      cumShifts.push(cumShift);
+      stitched.push(round2(sp - cumShift));
+      seriesIdx.push(s); daysToExp.push(dte); isRoll.push(rollToday);
+
+      if (rollToday) {
+        const nextLvl = o.steps[(s + 1) % o.steps.length];
+        const nSp = round2(nextLvl + seas + dev + sqz);
+        const gap = round2(nSp - sp);
+        nextRaw.push(nSp);
+        rollGap.push(gap);
+        cumShift = round2(cumShift + gap);
+      } else {
+        nextRaw.push(null);
+        rollGap.push(0);
+      }
+    }
+    return {
+      near, far, raw, stitched, cumShifts, seasonalNorm,
+      seriesIdx, daysToExp, isRoll, nextRaw, rollGap,
+      seriesNames: CAL_SERIES_NAMES, opts: o
+    };
+  }
+
+  const CAL_SCENARIOS = [
+    { id: 'steps', name: 'Ступеньки между сериями', opts: { steps: [8, 22, 6, 21, 9], seasonAmp: 0 }, note: 'У каждой квартальной пары свой уровень переноса (например, менялись ставки и сроки). На стыках серий сырой график прыгает на 12–16 пунктов без реального движения рынка.' },
+    { id: 'seasonal', name: 'Сильная сезонность (зима / лето)', opts: { steps: [12, 14, 11, 13, 12], seasonAmp: 13 }, note: 'Спред закономерно ходит волной по временам года (летом контанго шире, к зиме уходит в бэквордацию), повторяя профиль прошлых лет.' },
+    { id: 'squeeze', name: 'Дефицит и взрыв бэквордации', opts: { steps: [12, 15, 11, 14, 12], squeezeAt: 165, squeezeMag: -42 }, note: 'До 165-го дня обычное контанго, затем на складах возникает острый дефицит: ближний фьючерс взлетает, и спред Дальний − Ближний рушится в глубокую бэквордацию.' },
+    { id: 'abnormal', name: 'Аномальный год (слом сезонности)', opts: { steps: [12, 14, 11, 13, 12], seasonAmp: 13, abnormal: true }, note: 'Три прошлых года сезонная волна шла в одну сторону, а в этом году погода или урожай перевернули картину.' }
+  ];
+  const genCalScenario = (seed, scn) => genCalendar(Object.assign({ seed }, scn.opts));
+
+  /* Бэктест календарного спреда с честным учётом серий и экспирации:
+     expiryMode = 'naive' — сигнал считается по сырой склейке raw со ступеньками (учебная ошибка!), но деньги на счёте считаются честно по реальным контрактам;
+     expiryMode = 'close' — сигнал по бесшовной склейке, за rollDays до экспирации позиция закрывается (без ролла);
+     expiryMode = 'roll'  — сигнал по бесшовной склейке, в день ролла открытая позиция переносится в следующую серию с оплатой rollCost.
+     seasonal = true      — из бесшовного спреда дополнительно вычитается сезонная норма прошлых 3 лет. */
+  function backtestCalendar(cal, params) {
+    const p = Object.assign({}, DEFAULTS, { expiryMode: 'roll', seasonal: false, rollCost: null }, params || {});
+    const rCost = p.rollCost !== null && p.rollCost !== undefined ? p.rollCost : p.cost;
+    const sigSeries = cal.raw.map((v, i) => {
+      const base = p.expiryMode === 'naive' ? v : cal.stitched[i];
+      return p.seasonal ? base - cal.seasonalNorm[i] : base;
+    });
+    const st = rolling(sigSeries, p.n);
+    const len = cal.raw.length;
+    const trades = [];
+    const equity = new Array(len).fill(0);
+    const pos = new Array(len).fill(0);
+    const signal = new Array(len).fill(null);
+    const executed = new Array(len).fill(null);
+    const rolled = new Array(len).fill(false);
+    let cur = 0, entry = null, realized = 0, pending = null;
+
+    function openAt(act, t, sigIdx) {
+      cur = act.dir;
+      entry = {
+        dir: act.dir, signalIdx: sigIdx, execIdx: t,
+        stitchedIn: cal.stitched[t], rawIn: cal.raw[t], seriesIn: cal.seriesIdx[t],
+        z: st.z[sigIdx], rolls: 0, legs: [{ series: cal.seriesIdx[t], inIdx: t, rawIn: cal.raw[t] }]
+      };
+      realized -= p.cost;
+      executed[t] = act;
+    }
+
+    function closeAt(act, t, sigIdx) {
+      const lastLeg = entry.legs[entry.legs.length - 1];
+      lastLeg.outIdx = t;
+      lastLeg.rawOut = cal.raw[t];
+      const gross = entry.dir * (cal.stitched[t] - entry.stitchedIn);
+      const rollPaid = entry.rolls * rCost;
+      const totalCost = p.cost + rollPaid;
+      trades.push({
+        dir: entry.dir, signalIn: entry.signalIdx, entryIdx: entry.execIdx, exitIdx: t, signalOut: sigIdx,
+        seriesIn: entry.seriesIn, seriesOut: cal.seriesIdx[t],
+        entryS: entry.rawIn, exitS: cal.raw[t],
+        stitchedIn: entry.stitchedIn, stitchedOut: cal.stitched[t],
+        entryZ: entry.z, exitZ: st.z[sigIdx],
+        rolls: entry.rolls, rollCostPaid: rollPaid, legs: entry.legs,
+        reason: act.reason, gross, cost: totalCost, net: gross - totalCost, bars: t - entry.execIdx
+      });
+      realized += gross - rollPaid;
+      cur = 0; entry = null;
+      executed[t] = act;
+    }
+
+    for (let t = 0; t < len; t++) {
+      if (pending) {
+        if (pending.act.type === 'open') openAt(pending.act, t, pending.signalIdx);
+        else if (cur !== 0) closeAt(pending.act, t, pending.signalIdx);
+        pending = null;
+      }
+      if (st.z[t] !== null) {
+        if (p.expiryMode === 'close' && cal.isRoll[t]) {
+          if (cur !== 0) {
+            const act = { type: 'close', reason: 'expiry' };
+            signal[t] = act;
+            closeAt(act, t, t);
+          }
+        } else {
+          const held = cur !== 0 ? t - entry.execIdx : 0;
+          const act = decide(cur, st.z[t], held, p);
+          if (act) {
+            signal[t] = act;
+            if (p.delay === 0) {
+              if (act.type === 'open') openAt(act, t, t);
+              else closeAt(act, t, t);
+            } else if (t < len - 1) {
+              pending = { act, signalIdx: t };
+            }
+          }
+          if (cur !== 0 && cal.isRoll[t]) {
+            const curLeg = entry.legs[entry.legs.length - 1];
+            curLeg.outIdx = t;
+            curLeg.rawOut = cal.raw[t];
+            entry.legs.push({ series: cal.seriesIdx[t] + 1, inIdx: t, rawIn: cal.nextRaw[t] });
+            entry.rolls++;
+            rolled[t] = true;
+          }
+        }
+      }
+      pos[t] = cur;
+      equity[t] = realized + (cur !== 0 ? cur * (cal.stitched[t] - entry.stitchedIn) - entry.rolls * rCost : 0);
+    }
+    if (cur !== 0) {
+      const last = len - 1;
+      closeAt({ type: 'close', reason: 'end' }, last, last);
+      pos[last] = 0;
+      equity[last] = realized;
+    }
+    return {
+      params: p, trades, equity, pos, signal, executed, rolled,
+      sigSeries, mean: st.mean, std: st.std, z: st.z, metrics: metrics(trades, equity, pos)
+    };
+  }
+
+  /* Пошаговая выкладка одного дня для экрана 7 раздела «Календарный спред». */
+  function explainCalendar(cal, n, t, opts) {
+    if (t < n - 1) return null;
+    const o = Object.assign({ expiryMode: 'roll', seasonal: false }, opts || {});
+    const sigSeries = cal.raw.map((v, i) => {
+      const base = o.expiryMode === 'naive' ? v : cal.stitched[i];
+      return o.seasonal ? base - cal.seasonalNorm[i] : base;
+    });
+    const ex = explainBar(sigSeries, n, t);
+    const sIdx = cal.seriesIdx[t];
+    return Object.assign({
+      seriesIdx: sIdx,
+      seriesName: cal.seriesNames[sIdx % cal.seriesNames.length],
+      near: cal.near[t],
+      far: cal.far[t],
+      raw: cal.raw[t],
+      cumShift: cal.cumShifts[t],
+      stitched: cal.stitched[t],
+      seasonalNorm: cal.seasonalNorm[t],
+      daysToExp: cal.daysToExp[t],
+      isRoll: cal.isRoll[t],
+      nextRaw: cal.nextRaw[t],
+      rollGap: cal.rollGap[t]
+    }, ex);
+  }
+
   const stats = (series, n, mode) => (mode === 'ewma' ? ewma(series, n) : mode === 'robust' ? robust(series, n) : rolling(series, n));
 
   /* Все промежуточные числа для одного дня: то, что показывает экран «Пошаговый разбор». */
@@ -603,7 +819,7 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
