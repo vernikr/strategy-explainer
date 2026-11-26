@@ -20,7 +20,7 @@
 
   function btParams(over) {
     const p = Object.assign({}, state.params, over || {});
-    return { n: p.n, entryZ: p.entryZ, exitZ: p.exitZ, stopZ: p.stopOn ? p.stopZ : null, maxHold: p.maxHold, cost: p.cost, delay: p.delayOn ? 1 : 0 };
+    return { mode: p.mode || 'sma', n: p.n, entryZ: p.entryZ, exitZ: p.exitZ, stopZ: p.stopOn ? p.stopZ : null, maxHold: p.maxHold, cost: p.cost, delay: p.delayOn ? 1 : 0 };
   }
   const backtest = (over, series) => E.backtest(series || data().spread, btParams(over));
 

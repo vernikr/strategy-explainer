@@ -5,9 +5,9 @@
 
   /* ---------- маршрутизация ---------- */
   let stratId = 'zscore', stepIdx = 0;
-  const visited = new Set();
+  const visited = {};
   const strategies = () => window.STRATEGIES;
-  const screensOf = (id) => (id === 'zscore' ? window.ZSCREENS : []);
+  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS })[id] || [];
 
   function parseHash() {
     const m = location.hash.match(/^#([a-z0-9_-]+)(?:\/(\d+))?/);
@@ -30,8 +30,9 @@
     if (!s.ready) { renderStub(s, steps, root); window.scrollTo(0, 0); return; }
 
     const sc = screensOf(s.id);
-    visited.add(stepIdx);
-    steps.innerHTML = '<h4>Z-score · экраны</h4>' + sc.map((x, i) => '<button class="step ' + (i === stepIdx ? 'on' : visited.has(i) ? 'done' : '') + '" data-i="' + i + '"><span class="num">' + (i + 1) + '</span><span>' + x.title + '</span></button>').join('');
+    const seen = (visited[s.id] = visited[s.id] || new Set());
+    seen.add(stepIdx);
+    steps.innerHTML = '<h4>' + s.name + ' · экраны</h4>' + sc.map((x, i) => '<button class="step ' + (i === stepIdx ? 'on' : seen.has(i) ? 'done' : '') + '" data-i="' + i + '"><span class="num">' + (i + 1) + '</span><span>' + x.title + '</span></button>').join('');
     steps.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => go(s.id, +b.dataset.i)));
 
     const cur = sc[stepIdx];
@@ -56,7 +57,7 @@
   function renderStub(s, steps, root) {
     steps.innerHTML = '<h4>' + s.name + ' · план</h4>' + s.plan.map((t, i) => '<div class="step" style="cursor:default;opacity:.7"><span class="num">' + (i + 1) + '</span><span>' + t + '</span></div>').join('');
     root.innerHTML = '<h1>' + s.name + '</h1><p class="lead">' + s.lead + '</p>' +
-      '<div class="stub"><div class="card"><h4>Статус</h4><p><span class="pill time">В разработке</span> Подробный разбор появится после пилота. В пилоте полностью объяснён только простой z-score.</p></div>' +
+      '<div class="stub"><div class="card"><h4>Статус</h4><p><span class="pill time">В разработке</span> Подробный разбор появится позже. Сейчас полностью объяснены: ' + strategies().filter((x) => x.ready).map((x) => x.name).join(' и ') + '.</p></div>' +
       '<div class="card"><h4>Чем отличается от простого z-score</h4><p>' + s.diff + '</p></div>' +
       '<div class="card"><h4>Что будет объяснено</h4><p>' + s.plan.join(' · ') + '</p></div>' +
       '<button class="b primary" id="back">← Вернуться к разбору z-score</button></div>';
