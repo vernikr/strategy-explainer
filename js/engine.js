@@ -259,6 +259,195 @@
   ];
   const genHedge = (seed, scn) => generate(Object.assign({ seed }, scn.opts));
 
+  /* ---------- Коинтеграция и проверка стационарности ---------- */
+  /* Критические значения МакКиннона (2010) с поправкой на длину выборки T:
+     dfCrit — для одного ряда со свободным членом (тест Дики — Фуллера),
+     egCrit — для остатков регрессии двух рядов A и B (двухшаговый тест Энгла — Грейнджера).
+     Пороги отрицательные: чем левее (меньше) τ, тем увереннее отвергается случайное блуждание. */
+  function dfCrit(n, level) {
+    const T = Math.max(10, n || 100);
+    if (level === 1) return -3.43035 - 6.5393 / T - 16.786 / (T * T);
+    if (level === 10) return -2.56677 - 1.5384 / T - 2.809 / (T * T);
+    return -2.86154 - 2.8903 / T - 4.234 / (T * T);
+  }
+  function egCrit(n, level) {
+    const T = Math.max(10, n || 100);
+    if (level === 1) return -3.89644 - 10.9519 / T - 22.527 / (T * T);
+    if (level === 10) return -3.04445 - 4.2412 / T - 2.718 / (T * T);
+    return -3.33613 - 6.1101 / T - 6.823 / (T * T);
+  }
+
+  /* Простой тест Дики — Фуллера: оцениваем регрессию Δe_t = a + b·e_{t−1}.
+     Если работает «резинка», то после ухода вверх (e_{t−1} > 0) шаг чаще вниз (Δe_t < 0), то есть b < 0.
+     Статистика τ = b ÷ se(b) показывает, во сколько раз отрицательный наклон больше своей погрешности.
+     Период полувозврата T½ = ln(0,5) ÷ ln(1 + b): за сколько дней отклонение сжимается вдвое. */
+  function dfTest(series) {
+    const n = series.length, m = Math.max(0, n - 1);
+    if (n < 4) return { m, a: null, b: null, se: null, tau: null, halfLife: null, rss: null, sxx: null, sxy: null, mx: null, my: null };
+    const prev = [], step = [];
+    for (let i = 1; i < n; i++) { prev.push(series[i - 1]); step.push(series[i] - series[i - 1]); }
+    const f = ols(prev, step);
+    if (f.k === null) return { m, a: null, b: null, se: null, tau: null, halfLife: null, rss: null, sxx: f.sxx, sxy: f.sxy, mx: f.mx, my: f.my };
+    const tau = f.se !== null && f.se > 1e-12 ? f.k / f.se : null;
+    const halfLife = f.k >= -1e-9 ? null : (1 + f.k <= 1e-6 ? 0 : Math.log(0.5) / Math.log(1 + f.k));
+    return { m, a: f.alpha, b: f.k, se: f.se, tau, halfLife, rss: f.rss, sxx: f.sxx, sxy: f.sxy, mx: f.mx, my: f.my };
+  }
+
+  /* Двухшаговый тест Энгла — Грейнджера для пары (A, B):
+     1) проводим прямую A ≈ c + k·B и берём остатки e_t = A_t − c − k·B_t;
+     2) проверяем остатки тестом Дики — Фуллера и сравниваем τ со строгим порогом egCrit. */
+  function cointTest(a, b) {
+    const n = a.length, reg = ols(b, a);
+    let retR = null;
+    if (n > 2) {
+      const da = [], db = [];
+      for (let i = 1; i < n; i++) { da.push(a[i] - a[i - 1]); db.push(b[i] - b[i - 1]); }
+      retR = ols(db, da).r;
+    }
+    const crit1 = egCrit(n, 1), crit5 = egCrit(n, 5), crit10 = egCrit(n, 10);
+    if (reg.k === null) return { n, k: null, alpha: null, seK: null, r: null, r2: null, retR, res: null, a: null, b: null, se: null, tau: null, halfLife: null, rss: null, sxx: null, sxy: null, mx: null, my: null, m: Math.max(0, n - 1), crit1, crit5, crit10, passed: false };
+    const res = a.map((y, i) => y - reg.alpha - reg.k * b[i]);
+    const df = dfTest(res);
+    return {
+      n, k: reg.k, alpha: reg.alpha, seK: reg.se, r: reg.r, r2: reg.r2, retR, res,
+      a: df.a, b: df.b, se: df.se, tau: df.tau, halfLife: df.halfLife,
+      rss: df.rss, sxx: df.sxx, sxy: df.sxy, mx: df.mx, my: df.my, m: df.m,
+      crit1, crit5, crit10, passed: df.tau !== null && df.tau <= crit5
+    };
+  }
+
+  /* Скользящая проверка коинтеграции по последним m дням (строго по прошлому, без заглядывания в будущее). */
+  function rollingCoint(a, b, m, opts) {
+    const len = a.length, o = opts || {};
+    const crit = o.tauMax != null ? o.tauMax : egCrit(m, 5);
+    const maxHL = o.maxHalfLife || 0;
+    const mk = () => new Array(len).fill(null);
+    const out = { m, crit, maxHalfLife: maxHL, tau: mk(), b: mk(), se: mk(), halfLife: mk(), k: mk(), r2: mk(), ok: new Array(len).fill(false) };
+    for (let t = m - 1; t < len; t++) {
+      const c = cointTest(a.slice(t - m + 1, t + 1), b.slice(t - m + 1, t + 1));
+      out.tau[t] = c.tau; out.b[t] = c.b; out.se[t] = c.se; out.halfLife[t] = c.halfLife; out.k[t] = c.k; out.r2[t] = c.r2;
+      out.ok[t] = c.tau !== null && c.tau <= crit && (!maxHL || (c.halfLife !== null && c.halfLife <= maxHL));
+    }
+    return out;
+  }
+
+  /* Все промежуточные числа для пошагового разбора дня со светофором коинтеграции. */
+  function explainCoint(a, b, m, n, t, opts) {
+    const need = Math.max(m, n || 0);
+    if (t < need - 1) return null;
+    const o = opts || {};
+    const ct = cointTest(a.slice(t - m + 1, t + 1), b.slice(t - m + 1, t + 1));
+    if (ct.k === null) return null;
+    const steps = [];
+    for (let j = 1; j < m; j++) {
+      const prev = ct.res[j - 1], cur = ct.res[j], step = cur - prev;
+      const dx = prev - ct.mx, dy = step - ct.my;
+      const fit = ct.a !== null ? ct.a + ct.b * prev : null;
+      steps.push({ idx: t - m + 1 + j, prev, cur, step, dx, dy, dxx: dx * dx, dxy: dx * dy, fit, err: fit === null ? null : step - fit });
+    }
+    const crit = o.tauMax != null ? o.tauMax : ct.crit5;
+    const maxHL = o.maxHalfLife || 0;
+    const ok = ct.tau !== null && ct.tau <= crit && (!maxHL || (ct.halfLife !== null && ct.halfLife <= maxHL));
+    const hedge = n > 0 ? explainHedge(a, b, n, t, o) : null;
+    return { coint: ct, steps, crit, maxHalfLife: maxHL, ok, hedge };
+  }
+
+  /* Генератор пар для раздела «Коинтеграция»: позволяет включать/выключать «поводок» (reversion),
+     делать ряды полностью независимыми блужданиями (independent) или рвать связь с заданного дня (unleashAt). */
+  function genPair(opts) {
+    const o = Object.assign(
+      { seed: 7, n: 320, base: 1000, level: 60, beta: 1.6, reversion: 0.20, noise: 2.2, walkStep: 4, independent: false, unleashAt: null, breakDrift: 0 },
+      opts || {}
+    );
+    const gauss = makeGauss(mulberry32(o.seed));
+    const a = [], b = [], spread = [], beta = [];
+    let wb = o.base, wa = o.base, dev = 0;
+    for (let t = 0; t < o.n; t++) {
+      wb += o.walkStep * gauss();
+      if (o.independent) {
+        wa += o.walkStep * o.beta * gauss();
+        const pb = round2(wb), pa = round2(wa + o.level);
+        b.push(pb); a.push(pa); spread.push(round2(pa - pb)); beta.push(0);
+      } else {
+        const rev = o.unleashAt !== null && t >= o.unleashAt ? 0 : o.reversion;
+        const drift = o.unleashAt !== null && t >= o.unleashAt ? o.breakDrift : 0;
+        dev += -rev * dev + drift + o.noise * gauss();
+        const pb = round2(wb), pa = round2(o.base + o.beta * (wb - o.base) + o.level + dev);
+        b.push(pb); a.push(pa); spread.push(round2(pa - pb)); beta.push(o.beta);
+      }
+    }
+    return { a, b, spread, beta, opts: o };
+  }
+
+  const COINT_SCENARIOS = [
+    { id: 'true', name: 'Устойчивая связь («поводок» есть)', opts: { beta: 1.6, reversion: 0.20, noise: 2.2 }, note: 'A и B ходят за общим рынком (β = 1,6), а отклонение между ними каждый день притягивается обратно на 20% (полувозврат около 3 дней).' },
+    { id: 'unleashed', name: 'Синхронные шаги без поводка', opts: { beta: 1.6, reversion: 0, noise: 3.2 }, note: 'Каждый день A и B шагают в одну сторону (высокая корреляция и высокий R² цен!), но «резинки» между ними нет: разойдясь, они не обязаны сходиться.' },
+    { id: 'break', name: 'Поводок рвётся на 150-м дне', opts: { beta: 1.6, reversion: 0.20, unleashAt: 150, breakDrift: 0.45 }, note: 'Первые 150 дней пара по-настоящему коинтегрирована, а затем связь исчезает и разница начинает уплывать.' },
+    { id: 'slow', name: 'Медленная («вялая») резинка', opts: { beta: 1.6, reversion: 0.045, noise: 2.2 }, note: 'Возврат к среднему есть, но слабый (полувозврат около 15 дней): на коротком окне его трудно отличить от случайного блуждания.' }
+  ];
+  const genCoint = (seed, scn) => genPair(Object.assign({ seed }, scn.opts));
+
+  /* Учебная «корзина рынка» из 16 пар-кандидатов для экрана отбора пар:
+     часть пар действительно связана, часть лишь притворяется похожей. */
+  const COINT_POOL_SPECS = [
+    { name: 'Нефть сорт А / сорт Б', kind: 'true', kindLabel: 'настоящая связь', opts: { beta: 1.3, reversion: 0.24, noise: 2.0 } },
+    { name: 'Банк обыкн. / преф.', kind: 'true', kindLabel: 'настоящая связь', opts: { beta: 1.15, reversion: 0.22, noise: 1.9 } },
+    { name: 'Металл А / Металл Б', kind: 'true', kindLabel: 'настоящая связь', opts: { beta: 1.6, reversion: 0.19, noise: 2.3 } },
+    { name: 'Индекс 1 / Индекс 2', kind: 'true', kindLabel: 'настоящая связь', opts: { beta: 1.45, reversion: 0.17, noise: 2.1 } },
+    { name: 'Сырьё и переработка', kind: 'slow', kindLabel: 'медленная резинка', opts: { beta: 1.5, reversion: 0.05, noise: 2.2 } },
+    { name: 'Два экспортёра', kind: 'slow', kindLabel: 'медленная резинка', opts: { beta: 1.25, reversion: 0.04, noise: 2.1 } },
+    { name: 'Старая связка № 1', kind: 'break', kindLabel: 'слом после отбора', opts: { beta: 1.5, reversion: 0.22, unleashAt: 155, breakDrift: 0.45 } },
+    { name: 'Старая связка № 2', kind: 'break', kindLabel: 'слом после отбора', opts: { beta: 1.35, reversion: 0.20, unleashAt: 165, breakDrift: -0.40 } },
+    { name: 'Один сектор без поводка № 1', kind: 'unleashed', kindLabel: 'шаги вместе, поводка нет', opts: { beta: 1.5, reversion: 0, noise: 2.8 } },
+    { name: 'Один сектор без поводка № 2', kind: 'unleashed', kindLabel: 'шаги вместе, поводка нет', opts: { beta: 1.2, reversion: 0, noise: 2.6 } },
+    { name: 'Один сектор без поводка № 3', kind: 'unleashed', kindLabel: 'шаги вместе, поводка нет', opts: { beta: 1.7, reversion: 0, noise: 3.0 } },
+    { name: 'Один сектор без поводка № 4', kind: 'unleashed', kindLabel: 'шаги вместе, поводка нет', opts: { beta: 1.0, reversion: 0, noise: 2.5 } },
+    { name: 'Чужие активы № 1', kind: 'indep', kindLabel: 'случайная пара', opts: { beta: 1.2, independent: true } },
+    { name: 'Чужие активы № 2', kind: 'indep', kindLabel: 'случайная пара', opts: { beta: 1.4, independent: true } },
+    { name: 'Чужие активы № 3', kind: 'indep', kindLabel: 'случайная пара', opts: { beta: 1.0, independent: true } },
+    { name: 'Чужие активы № 4', kind: 'indep', kindLabel: 'случайная пара', opts: { beta: 1.5, independent: true } }
+  ];
+  function genCointPool(baseSeed) {
+    const s0 = baseSeed || 7;
+    return COINT_POOL_SPECS.map((sp, i) => {
+      const d = genPair(Object.assign({ seed: s0 * 31 + i * 17 + 3, n: 320 }, sp.opts));
+      return Object.assign({ id: i, name: sp.name, kind: sp.kind, kindLabel: sp.kindLabel }, d);
+    });
+  }
+
+  /* Бэктест с проверкой коинтеграции:
+     filterMode = 'none'      — обычный динамический хедж (без проверки связи);
+     filterMode = 'prescreen' — проверяем связь один раз на первых cointWin днях; если тест не пройден, пару не торгуем;
+     filterMode = 'rolling'   — проверяем связь по скользящему окну cointWin и разрешаем НОВЫЕ входы только при «зелёном свете».
+     Выходы (цель, стоп, время) работают всегда, чтобы открытая сделка не «застревала». */
+  function backtestCoint(a, b, params) {
+    const p = Object.assign({}, DEFAULTS, { lots: 0, cointWin: 100, filterMode: 'rolling', tauMax: null, maxHalfLife: 0, startAt: 0 }, params || {});
+    const crit = p.tauMax != null ? p.tauMax : egCrit(p.cointWin, 5);
+    const h = hedgeStats(a, b, p.n, { lots: p.lots });
+    let coint = null, prescreen = null, allowOpen = null;
+    let startAt = p.startAt || 0;
+    if (p.filterMode === 'prescreen') {
+      const m = Math.min(a.length, p.cointWin);
+      prescreen = cointTest(a.slice(0, m), b.slice(0, m));
+      const ok = prescreen.tau !== null && prescreen.tau <= crit && (!p.maxHalfLife || (prescreen.halfLife !== null && prescreen.halfLife <= p.maxHalfLife));
+      prescreen.filterOk = ok;
+      prescreen.critUsed = crit;
+      startAt = Math.max(startAt, m);
+      allowOpen = a.map((_, i) => i >= m && ok);
+    } else if (p.filterMode === 'rolling') {
+      coint = rollingCoint(a, b, p.cointWin, { tauMax: crit, maxHalfLife: p.maxHalfLife });
+      startAt = Math.max(startAt, p.cointWin - 1);
+      allowOpen = coint.ok;
+    }
+    const simP = Object.assign({}, p, { startAt, allowOpen });
+    const res = simulate(h.spread, h, simP, { a, b, k: h.kUsed });
+    res.hedge = h;
+    res.coint = coint;
+    res.prescreen = prescreen;
+    res.critUsed = crit;
+    return res;
+  }
+
   const stats = (series, n, mode) => (mode === 'ewma' ? ewma(series, n) : mode === 'robust' ? robust(series, n) : rolling(series, n));
 
   /* Все промежуточные числа для одного дня: то, что показывает экран «Пошаговый разбор». */
@@ -311,6 +500,8 @@
     const pos = new Array(len).fill(0);
     const signal = new Array(len).fill(null);
     const executed = new Array(len).fill(null);
+    const blocked = new Array(len).fill(null);
+    const startAt = p.startAt || 0;
     let cur = 0, entry = null, realized = 0, pending = null;
 
     function apply(act, t, signalIdx) {
@@ -335,9 +526,13 @@
 
     for (let t = 0; t < len; t++) {
       if (pending) { apply(pending.act, t, pending.signalIdx); pending = null; }
-      if (z[t] !== null) {
+      if (z[t] !== null && (cur !== 0 || t >= startAt)) {
         const held = cur !== 0 ? t - entry.execIdx : 0;
-        const act = decide(cur, z[t], held, p);
+        let act = decide(cur, z[t], held, p);
+        if (act && act.type === 'open' && p.allowOpen && !p.allowOpen[t]) {
+          blocked[t] = act;
+          act = null;
+        }
         if (act) {
           signal[t] = act;
           if (p.delay === 0) apply(act, t, t);
@@ -353,7 +548,7 @@
       pos[last] = 0;
       equity[last] = realized;
     }
-    return { params: p, trades, equity, pos, signal, executed, mean, std, z, metrics: metrics(trades, equity, pos) };
+    return { params: p, trades, equity, pos, signal, executed, blocked, mean, std, z, metrics: metrics(trades, equity, pos) };
   }
 
   function metrics(trades, equity, pos) {
@@ -408,7 +603,7 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

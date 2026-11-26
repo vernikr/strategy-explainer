@@ -282,4 +282,95 @@ for (const seed of [7, 11]) {
 }
 const br = E.backtest(E.generate({ seed: 7, breakAt: 200 }).spread, {}).metrics;
 console.log('со сломом связи: сделок', br.count, 'итог', br.total.toFixed(1), 'просадка', br.maxDD.toFixed(1));
+
+// 23. Коинтеграция: ручной пример на 6 днях — все промежуточные числа точные!
+// B = [104, 101, 103, 103, 102, 105], A = [260, 253, 254, 255, 254, 260].
+// Шаг 1: B̄ = 103, Ā = 256, Σ(B−B̄)² = 10, Σ(B−B̄)(A−Ā) = 20 → k = 2, c = 50, остатки e = [2, 1, −2, −1, 0, 0].
+// Шаг 2: вчера = [2, 1, −2, −1, 0] (среднее 0), шаг = [−1, −3, 1, 1, 0] (среднее −0,4),
+// Σx² = 10, Σxy = −8 → b = −0,8, RSS = 4,8, se = √(4,8 ÷ 3 ÷ 10) = 0,4, τ = −0,8 ÷ 0,4 = −2,0.
+{
+  const B6 = [104, 101, 103, 103, 102, 105], A6 = [260, 253, 254, 255, 254, 260];
+  const ct = E.cointTest(A6, B6);
+  close(ct.k, 2); close(ct.alpha, 50); close(ct.seK, 0.5); close(ct.r2, 0.8);
+  [2, 1, -2, -1, 0, 0].forEach((v, i) => close(ct.res[i], v));
+  close(ct.mx, 0); close(ct.my, -0.4); close(ct.sxx, 10); close(ct.sxy, -8);
+  close(ct.b, -0.8); close(ct.a, -0.4); close(ct.rss, 4.8); close(ct.se, 0.4);
+  close(ct.tau, -2.0); close(ct.halfLife, Math.log(0.5) / Math.log(0.2));
+  assert.strictEqual(ct.passed, false); // на 6 точках порог Энгла — Грейнджера около −4,02, τ = −2,0 не проходит
+  // Если ряд не сжимается (b >= 0), полувозврат не определён (null)
+  const up = E.dfTest([1, 2, 4, 8, 16]);
+  assert.ok(up.b > 0 && up.tau > 0);
+  assert.strictEqual(up.halfLife, null);
+  // Критические пороги Энгла — Грейнджера строже (меньше) Дики — Фуллера, а на коротком окне строже, чем на длинном
+  assert.ok(E.egCrit(100, 5) < E.dfCrit(100, 5));
+  assert.ok(E.egCrit(50, 5) < E.egCrit(300, 5));
+  assert.ok(E.egCrit(100, 1) < E.egCrit(100, 5) && E.egCrit(100, 5) < E.egCrit(100, 10));
+}
+
+// 24. Свойства теста на учебных сценариях и отсутствие заглядывания в будущее у rollingCoint / explainCoint.
+{
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  const passTrue = seeds.filter((sd) => { const d = E.genCoint(sd, E.COINT_SCENARIOS[0]); return E.cointTest(d.a, d.b).passed; }).length;
+  const passFake = seeds.filter((sd) => { const d = E.genCoint(sd, E.COINT_SCENARIOS[1]); return E.cointTest(d.a, d.b).passed; }).length;
+  assert.strictEqual(passTrue, 11);
+  assert.ok(passFake <= 2, 'ложных срабатываний не должно быть много: ' + passFake);
+
+  const d = E.genCoint(7, E.COINT_SCENARIOS[2]);
+  const rc = E.rollingCoint(d.a, d.b, 90);
+  assert.strictEqual(rc.tau[88], null);
+  for (const t of [89, 150, 319]) {
+    const ex = E.explainCoint(d.a, d.b, 90, 30, t);
+    close(ex.coint.tau, rc.tau[t]);
+    close(ex.coint.b, rc.b[t]);
+    assert.strictEqual(ex.ok, rc.ok[t]);
+    assert.strictEqual(ex.steps.length, 89);
+    close(ex.steps.reduce((q, r) => q + r.dxx, 0), ex.coint.sxx, 1e-6);
+    close(ex.steps.reduce((q, r) => q + r.dxy, 0), ex.coint.sxy, 1e-6);
+  }
+  // проверка отсутствия заглядывания в будущее: испортим данные после 180-го дня
+  const a2 = d.a.slice(), b2 = d.b.slice();
+  for (let i = 181; i < a2.length; i++) { a2[i] += 90; b2[i] -= 50; }
+  const rc2 = E.rollingCoint(a2, b2, 90);
+  for (let t = 0; t <= 180; t++) assert.strictEqual(rc.tau[t], rc2.tau[t]);
+}
+
+// 25. backtestCoint: согласованность P&L, отсутствие заглядывания в будущее, блокировка входов на ложной паре.
+{
+  for (const mode of ['none', 'prescreen', 'rolling']) {
+    for (const sd of [1, 3, 7]) {
+      const d = E.genCoint(sd, E.COINT_SCENARIOS[0]);
+      const res = E.backtestCoint(d.a, d.b, { filterMode: mode, cointWin: 90, delay: 1 });
+      close(res.equity[res.equity.length - 1], res.metrics.total, 1e-6);
+      res.trades.forEach((q) => {
+        const legsPnl = q.dir * ((d.a[q.exitIdx] - d.a[q.entryIdx]) - q.k * (d.b[q.exitIdx] - d.b[q.entryIdx]));
+        close(q.gross, legsPnl, 1e-9);
+        if (mode !== 'none') assert.ok(q.signalIn >= 89);
+      });
+    }
+  }
+  // На обрезанных данных первые завершённые сделки у скользящего фильтра те же самые
+  const d = E.genCoint(2, E.COINT_SCENARIOS[0]);
+  const full = E.backtestCoint(d.a, d.b, { filterMode: 'rolling', cointWin: 80 });
+  const cut = E.backtestCoint(d.a.slice(0, 220), d.b.slice(0, 220), { filterMode: 'rolling', cointWin: 80 });
+  const done = (r) => r.trades.filter((q) => q.reason !== 'end' && q.exitIdx < 210);
+  assert.deepStrictEqual(done(full).map((q) => [q.entryIdx, q.exitIdx, q.net]), done(cut).map((q) => [q.entryIdx, q.exitIdx, q.net]));
+
+  // Корзина из 16 пар детерминирована
+  const p1 = E.genCointPool(7), p2 = E.genCointPool(7);
+  assert.strictEqual(p1.length, 16);
+  assert.deepStrictEqual(p1[0].a, p2[0].a);
+}
+
+// 26. Сводка по коинтеграции (смотрим глазами).
+for (const sc of E.COINT_SCENARIOS) {
+  let no = 0, pr = 0, rl = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const d = E.genCoint(sd, sc);
+    no += E.backtestCoint(d.a, d.b, { filterMode: 'none', startAt: 100 }).metrics.total;
+    pr += E.backtestCoint(d.a, d.b, { filterMode: 'prescreen', cointWin: 100 }).metrics.total;
+    rl += E.backtestCoint(d.a, d.b, { filterMode: 'rolling', cointWin: 100, startAt: 100 }).metrics.total;
+  });
+  console.log('коинтеграция, «' + sc.name + '»: без фильтра ' + no.toFixed(0) + ', отбор ' + pr.toFixed(0) + ', скользящий ' + rl.toFixed(0));
+}
+
 console.log('OK: все проверки пройдены');
