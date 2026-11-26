@@ -1920,7 +1920,485 @@
     }, ex);
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+
+  /* ---------- Продвинутая оценка β(t) и диагностика здоровья связи (#56, #47) ---------- */
+  /* Ортогональная регрессия (Total Least Squares, TLS): минимизирует перпендикулярные расстояния до прямой y = α + k·x,
+     симметрично учитывая шум в обеих ногах: tls(y, x).k === 1 / tls(x, y).k. */
+  function tls(x, y) {
+    const n = x.length;
+    let mx = 0, my = 0;
+    for (let i = 0; i < n; i++) { mx += x[i]; my += y[i]; }
+    mx /= n; my /= n;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = x[i] - mx, dy = y[i] - my;
+      sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+    }
+    if (Math.abs(sxy) < 1e-12) return { n, mx, my, sxx, syy, sxy, k: 0, alpha: my };
+    const diff = syy - sxx;
+    const k = (diff + Math.sqrt(diff * diff + 4 * sxy * sxy)) / (2 * sxy);
+    return { n, mx, my, sxx, syy, sxy, k, alpha: my - k * mx };
+  }
+
+  /* Робастная регрессия Тейла — Сена (Theil–Sen): медиана всех попарных наклонов (y_j − y_i) / (x_j − x_i).
+     Не ломается от одиночных сбойных принтов (точка срыва ~29,3% выбросов). */
+  function theilSen(x, y) {
+    const n = x.length, slopes = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = x[j] - x[i];
+        if (Math.abs(dx) > 1e-9) slopes.push((y[j] - y[i]) / dx);
+      }
+    }
+    const k = slopes.length ? median(slopes) : 0;
+    const ints = new Array(n);
+    for (let i = 0; i < n; i++) ints[i] = y[i] - k * x[i];
+    return { n, k, alpha: median(ints), pairsCount: slopes.length };
+  }
+
+  /* Строго каузальный двумерный фильтр Калмана для y_t = α_t + β_t·x_t + ε_t (с опциональной обрезкой Хьюбера huberK):
+     шаг 1 (прогноз до наблюдения y_t): priorAlpha[t], priorBeta[t], ошибка innov[t] = y_t − (α_{t|t-1} + β_{t|t-1}·x_t);
+     шаг 2 (обновление после наблюдения): поправка на коэффициент усиления Калмана gainA[t], gainB[t]. */
+  function kalmanHedge(x, y, opts) {
+    const o = Object.assign({ qAlpha: 0.0001, qBeta: 0.0000035, obsVar: 3.2, huberK: 0 }, opts || {});
+    const n = x.length;
+    const alpha = new Array(n), beta = new Array(n);
+    const priorAlpha = new Array(n), priorBeta = new Array(n);
+    const innov = new Array(n), stdInnov = new Array(n), zInnov = new Array(n), gainA = new Array(n), gainB = new Array(n);
+
+    let b = 1.0, a = n ? y[0] - x[0] : 0;
+    let p00 = 16, p01 = 0, p11 = 0.02;
+
+    for (let t = 0; t < n; t++) {
+      p00 += o.qAlpha;
+      p11 += o.qBeta;
+      priorAlpha[t] = a;
+      priorBeta[t] = b;
+
+      const xt = x[t];
+      const yhat = a + b * xt;
+      const rawErr = y[t] - yhat;
+      const hp0 = p00 + xt * p01;
+      const hp1 = p01 + xt * p11;
+      const S = hp0 + xt * hp1 + o.obsVar;
+      const sSqrt = Math.sqrt(Math.max(1e-9, S));
+      innov[t] = rawErr;
+      stdInnov[t] = sSqrt;
+      zInnov[t] = rawErr / sSqrt;
+
+      let effErr = rawErr;
+      if (o.huberK > 0 && Math.abs(rawErr) > o.huberK * sSqrt) {
+        effErr = Math.sign(rawErr) * o.huberK * sSqrt;
+      }
+
+      const k0 = hp0 / S, k1 = hp1 / S;
+      a += k0 * effErr;
+      b += k1 * effErr;
+
+      const np00 = (1 - k0) * p00 - k0 * xt * p01;
+      const np01 = (1 - k0) * p01 - k0 * xt * p11;
+      const np11 = -k1 * p01 + (1 - k1 * xt) * p11;
+      p00 = Math.max(1e-9, np00);
+      p01 = np01;
+      p11 = Math.max(1e-9, np11);
+
+      alpha[t] = a;
+      beta[t] = b;
+      gainA[t] = k0;
+      gainB[t] = k1;
+    }
+    return { alpha, beta, priorAlpha, priorBeta, innov, stdInnov, zInnov, gainA, gainB };
+  }
+
+  /* Зеркальный тест стационарности KPSS (нулевая гипотеза H₀ — ряд стационарен вокруг уровня; 5%-порог = 0,463). */
+  function kpssTest(series) {
+    const n = series.length;
+    if (n < 12) return { stat: 0, crit5: 0.463, crit1: 0.739, bandwidth: 1, pass: true };
+    let m = 0;
+    for (let i = 0; i < n; i++) m += series[i];
+    m /= n;
+    const e = new Array(n);
+    let s = 0, sumS2 = 0, g0 = 0;
+    for (let i = 0; i < n; i++) {
+      e[i] = series[i] - m;
+      g0 += e[i] * e[i];
+      s += e[i];
+      sumS2 += s * s;
+    }
+    g0 /= n;
+    const L = Math.max(1, Math.floor(4 * Math.pow(n / 100, 0.25)));
+    let lrv = g0;
+    for (let l = 1; l <= L; l++) {
+      let gl = 0;
+      for (let t = l; t < n; t++) gl += e[t] * e[t - l];
+      gl /= n;
+      lrv += 2 * (1 - l / (L + 1)) * gl;
+    }
+    const stat = lrv > 1e-12 ? (sumS2 / (n * n)) / lrv : 0;
+    return { stat, crit5: 0.463, crit1: 0.739, bandwidth: L, pass: stat <= 0.463 };
+  }
+
+  /* Показатель Хёрста H ∈ (0; 1) по наклону вариограммы приращений: H < 0,5 — возврат к среднему, H ≈ 0,5 — блуждание, H > 0,5 — инерция/тренд. */
+  function hurstExp(series) {
+    const n = series.length;
+    const lags = [2, 4, 8, 16, 24].filter((L) => L * 2 <= n);
+    if (lags.length < 2) return 0.5;
+    const lx = [], ly = [];
+    lags.forEach((L) => {
+      let sumSq = 0, cnt = 0;
+      for (let i = L; i < n; i++) {
+        const d = series[i] - series[i - L];
+        sumSq += d * d; cnt++;
+      }
+      const sd = Math.sqrt(sumSq / Math.max(1, cnt));
+      if (sd > 1e-12) { lx.push(Math.log(L)); ly.push(Math.log(sd)); }
+    });
+    if (lx.length < 2) return 0.5;
+    const fit = ols(lx, ly);
+    return Math.max(0.02, Math.min(0.98, fit.k));
+  }
+
+  /* Четырёхквадрантная перекрёстная проверка стационарности ADF + KPSS + показатель Хёрста. */
+  function stationarityMatrix(series) {
+    const df = dfTest(series);
+    const kp = kpssTest(series);
+    const crit = dfCrit(series.length);
+    const adfPass = df && df.tau !== null ? df.tau <= crit : false;
+    const kpssPass = kp.pass;
+    const hurst = hurstExp(series);
+    let verdict = 'random_walk';
+    if (adfPass && kpssPass) verdict = 'confirmed';
+    else if (!adfPass && kpssPass) verdict = 'low_power';
+    else if (adfPass && !kpssPass) verdict = 'structural_break';
+    return {
+      adfTau: df ? df.tau : 0, adfCrit: crit, adfPass,
+      kpssStat: kp.stat, kpssCrit: kp.crit5, kpssPass,
+      hurst, verdict
+    };
+  }
+
+  /* Распределение периода полураспада t½ по скользящим отрезкам истории (а не обманчивая одна точка). */
+  function halfLifeDist(series, win, step) {
+    const w = win || 50, st = step || 10;
+    const vals = [];
+    let broken = 0, total = 0;
+    for (let i = 0; i + w <= series.length; i += st) {
+      total++;
+      const sub = series.slice(i, i + w);
+      const df = dfTest(sub);
+      if (df && df.b < -0.005 && 1 + df.b > 0.02) {
+        const hl = Math.min(60, -Math.LN2 / Math.log(1 + df.b));
+        vals.push(round2(hl));
+      } else {
+        broken++;
+        vals.push(60);
+      }
+    }
+    const sorted = vals.slice().sort((a, b) => a - b);
+    const q = (p) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : 0;
+    return {
+      values: vals, median: median(vals), p25: q(0.25), p75: q(0.75),
+      min: sorted.length ? sorted[0] : 0, max: sorted.length ? sorted[sorted.length - 1] : 0,
+      brokenShare: total ? broken / total : 0
+    };
+  }
+
+  /* Двусторонний детектор структурного разрыва Пейджа (CUSUM) по нормированным ошибкам прогноза. */
+  function cusumBreak(zArr, opts) {
+    const o = Object.assign({ slack: 0.75, hWarn: 4.0, hBreak: 6.5, startAt: 30 }, opts || {});
+    const n = zArr.length;
+    const pos = new Array(n).fill(0), neg = new Array(n).fill(0), score = new Array(n).fill(0), status = new Array(n).fill('ok');
+    let sp = 0, sn = 0;
+    for (let t = 0; t < n; t++) {
+      if (t < o.startAt || zArr[t] === null || !Number.isFinite(zArr[t])) continue;
+      const z = Math.max(-3.0, Math.min(3.0, zArr[t]));
+      sp = Math.max(0, sp + z - o.slack);
+      sn = Math.max(0, sn - z - o.slack);
+      pos[t] = sp; neg[t] = sn;
+      const sc = Math.max(sp, sn);
+      score[t] = sc;
+      status[t] = sc >= o.hBreak ? 'broken' : sc >= o.hWarn ? 'warn' : 'ok';
+    }
+    return { pos, neg, score, status, hWarn: o.hWarn, hBreak: o.hBreak };
+  }
+
+  /* Empirical Reversion Time (ERT) — среднее число баров между фактическими пересечениями медианы с фильтром минимального разброса σ_min. */
+  function calcERT(series, opts) {
+    const o = Object.assign({ sigmaMin: 0.8 }, opts || {});
+    const n = series.length;
+    if (!n) return { ert: 0, crossings: 0, sigma: 0, median: 0, valid: false };
+    const med = median(series);
+    let m = 0; for (let i = 0; i < n; i++) m += series[i]; m /= n;
+    let v = 0; for (let i = 0; i < n; i++) v += (series[i] - m) * (series[i] - m);
+    const sigma = Math.sqrt(v / n);
+    const crossIdx = [];
+    for (let i = 1; i < n; i++) {
+      if ((series[i - 1] - med) * (series[i] - med) <= 0 && (series[i - 1] !== med || series[i] !== med)) crossIdx.push(i);
+    }
+    let ert = n;
+    if (crossIdx.length >= 2) {
+      let gapSum = 0;
+      for (let k = 1; k < crossIdx.length; k++) gapSum += crossIdx[k] - crossIdx[k - 1];
+      ert = gapSum / (crossIdx.length - 1);
+    }
+    return { ert: round2(ert), crossings: crossIdx.length, sigma: round2(sigma), median: round2(med), valid: sigma >= o.sigmaMin };
+  }
+
+  const DIAG_SCENARIOS = [
+    {
+      id: 'smooth_drift_beta',
+      name: 'Плавный дрейф наклона β(t) от 0,60 к 1,90',
+      opts: { beta0: 0.60, beta1: 1.90, ouRho: 0.58, ouSd: 1.85, factorDrift: 0.30, factorSd: 2.3, xNoise: 0.15, glitchProb: 0, breakAt: null, breakDrift: 0 },
+      note: 'Чувствительность A к B плавно растёт по ходу года: скользящее окно OLS вечно опаздывает и пропускает чужой тренд в спред, а фильтр Калмана подстраивает β(t) мягко на каждом шаге.'
+    },
+    {
+      id: 'glitch_spikes',
+      name: 'Сбойные принты ленты и шум в обеих ногах',
+      opts: { beta0: 1.35, beta1: 1.35, ouRho: 0.58, ouSd: 1.85, factorDrift: 0.06, factorSd: 2.2, xNoise: 1.6, glitchProb: 0.055, glitchAmp: 22.0, breakAt: null, breakDrift: 0 },
+      note: 'Обе ноги шумят, а одиночные сбойные принты в ленте сбивают обычный OLS на 40 дней вперёд. Симметричный TLS + медианный наклон Тейла — Сена и защита Хьюбера сохраняют точный хедж.'
+    },
+    {
+      id: 'silent_break',
+      name: 'Тихий распад связи на 135-м дне (CUSUM + KPSS)',
+      opts: { beta0: 1.20, beta1: 1.20, ouRho: 0.58, ouSd: 1.8, factorDrift: 0.05, factorSd: 2.2, xNoise: 0.2, glitchProb: 0, breakAt: 135, breakDrift: 0.65 },
+      note: 'До 135-го дня пара честно возвращается к среднему, а затем «резинка» рвётся и A уползает вверх. Скользящий OLS маскирует поломку и копит убытки, а детектор CUSUM + KPSS зажигает красный бейдж.'
+    },
+    {
+      id: 'false_regime',
+      name: 'Ложная «полуживая» пара с памятью тренда (H > 0,5)',
+      opts: { beta0: 1.15, beta1: 1.15, ouRho: 0.992, trendMix: 0.42, ouSd: 1.35, factorDrift: 0.05, factorSd: 1.7, xNoise: 0.25, glitchProb: 0, breakAt: null, breakDrift: 0 },
+      note: 'Остатки лениво ходят длинными инерционными волнами (H > 0,5): без проверки возвратности стратегия застревает в затяжных движениях, а фильтр ADF + KPSS + Хёрст вовремя блокирует ложные входы.'
+    }
+  ];
+
+  function genDiag(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320, beta0: 1.15, beta1: 1.15, alpha0: 12,
+      ouRho: 0.58, ouSd: 1.8, trendMix: 0,
+      factorDrift: 0.05, factorSd: 1.8, xNoise: 0.2,
+      glitchProb: 0, glitchAmp: 20, breakAt: null, breakDrift: 0
+    }, opts || {});
+    const rng = mulberry32(o.seed);
+    const a = new Array(o.n), b = new Array(o.n);
+    const aExec = new Array(o.n), bExec = new Array(o.n);
+    const trueBeta = new Array(o.n), trueAlpha = new Array(o.n), isGlitch = new Array(o.n).fill(false);
+    let f = 100, u = 0, prevStep = 0;
+    for (let t = 0; t < o.n; t++) {
+      f = Math.max(25, f + o.factorDrift + randn(rng) * o.factorSd);
+      const bt = o.beta0 + (o.beta1 - o.beta0) * (t / (o.n - 1));
+      const broken = o.breakAt !== null && t >= o.breakAt;
+      const al = o.alpha0;
+      const eps = randn(rng) * o.ouSd + o.trendMix * prevStep;
+      u = (broken ? 1.0 : o.ouRho) * u + (broken ? o.breakDrift : 0) + eps;
+      prevStep = eps;
+
+      const bxExec = f + randn(rng) * o.xNoise;
+      const ayExec = al + bt * f + u;
+      let bxFeed = bxExec, ayFeed = ayExec;
+      if (o.glitchProb > 0 && t > 35 && rng() < o.glitchProb) {
+        if (rng() < 0.5) ayFeed += (rng() < 0.5 ? 1 : -1) * o.glitchAmp;
+        else bxFeed += (rng() < 0.5 ? 1 : -1) * (o.glitchAmp * 0.7);
+        isGlitch[t] = true;
+      }
+      a[t] = round2(ayFeed); b[t] = round2(bxFeed);
+      aExec[t] = round2(ayExec); bExec[t] = round2(bxExec);
+      trueBeta[t] = round2(bt); trueAlpha[t] = round2(al);
+    }
+    return { a, b, aExec, bExec, trueBeta, trueAlpha, isGlitch, opts: o };
+  }
+
+  function genDiagScenario(seed, scen) {
+    const sc = typeof scen === 'string' ? (DIAG_SCENARIOS.find((x) => x.id === scen) || DIAG_SCENARIOS[0]) : (scen || DIAG_SCENARIOS[0]);
+    return genDiag(Object.assign({ seed: seed || 7 }, sc.opts));
+  }
+
+  function backtestDiag(dg, params) {
+    const p = Object.assign({
+      n: 40, entryZ: 2.0, exitZ: 0.4, stopZ: 3.6, maxHold: 28, cost: 0.40,
+      diagMode: 'kalman_health'
+    }, params || {});
+    const len = dg.a.length;
+    const kEst = new Array(len).fill(null), aEst = new Array(len).fill(null);
+    const spread = new Array(len).fill(null), zArr = new Array(len).fill(null);
+    const health = new Array(len).fill('ok');
+
+    const kf = kalmanHedge(dg.b, dg.a, {
+      qAlpha: 0.0001, qBeta: 0.0000035, obsVar: 3.2,
+      huberK: p.diagMode === 'kalman_health' ? 2.1 : 0
+    });
+
+    const zForCusum = new Array(len).fill(null);
+    for (let t = p.n; t < len; t++) {
+      const baseStart = Math.max(15, t - 2 * p.n);
+      const baseWin = kf.innov.slice(baseStart, Math.max(baseStart + 10, t - 8));
+      const med = median(baseWin);
+      const mad = Math.max(0.8, median(baseWin.map((v) => Math.abs(v - med))) * MAD_SCALE);
+      zForCusum[t] = (kf.innov[t] - med) / mad;
+    }
+    const cs = cusumBreak(zForCusum, { slack: 0.75, hWarn: 4.0, hBreak: 6.5, startAt: p.n });
+
+    for (let t = p.n - 1; t < len; t++) {
+      const xWin = dg.b.slice(t - p.n + 1, t + 1);
+      const yWin = dg.a.slice(t - p.n + 1, t + 1);
+      if (p.diagMode === 'ols_plain' || p.diagMode === 'robust_tls') {
+        let fit;
+        if (p.diagMode === 'ols_plain') {
+          fit = ols(xWin, yWin);
+        } else {
+          const ts = theilSen(xWin, yWin);
+          const ort = tls(xWin, yWin);
+          const kPick = Math.abs(ort.k - ts.k) > 0.16 ? ts.k : 0.45 * ts.k + 0.55 * ort.k;
+          fit = { k: kPick, alpha: median(yWin.map((yv, idx) => yv - kPick * xWin[idx])) };
+        }
+        kEst[t] = fit.k;
+        aEst[t] = fit.alpha;
+        const resWin = new Array(p.n);
+        for (let j = 0; j < p.n; j++) resWin[j] = yWin[j] - fit.alpha - fit.k * xWin[j];
+        spread[t] = resWin[p.n - 1];
+        if (p.diagMode === 'ols_plain') {
+          let m = 0; for (let j = 0; j < p.n; j++) m += resWin[j]; m /= p.n;
+          let v = 0; for (let j = 0; j < p.n; j++) v += (resWin[j] - m) * (resWin[j] - m);
+          const sd = Math.sqrt(v / p.n);
+          zArr[t] = sd > 1e-9 ? (resWin[p.n - 1] - m) / sd : 0;
+        } else {
+          const med = median(resWin);
+          const mad = median(resWin.map((v) => Math.abs(v - med))) * MAD_SCALE;
+          zArr[t] = mad > 1e-9 ? (resWin[p.n - 1] - med) / mad : 0;
+        }
+      } else {
+        kEst[t] = kf.priorBeta[t];
+        aEst[t] = kf.priorAlpha[t];
+        spread[t] = kf.innov[t];
+        const inWin = kf.innov.slice(t - p.n + 1, t + 1);
+        if (p.diagMode === 'kalman_health') {
+          const med = median(inWin);
+          const mad = Math.max(0.6, median(inWin.map((v) => Math.abs(v - med))) * MAD_SCALE);
+          zArr[t] = (kf.innov[t] - med) / mad;
+          const checkLen = Math.min(t - 15, 70);
+          if (checkLen >= 35) {
+            const innovTail = kf.innov.slice(t - checkLen + 1, t + 1);
+            const kp = kpssTest(innovTail);
+            const h = hurstExp(innovTail);
+            const stM = dfTest(innovTail);
+            const adfOk = stM && stM.tau !== null && stM.tau <= dfCrit(innovTail.length);
+            const nonRev = (!adfOk && !kp.pass) || h > 0.48;
+            if ((cs.status[t] === 'broken' && (!kp.pass || h > 0.42)) || nonRev) health[t] = 'broken';
+            else if (cs.status[t] !== 'ok' || !adfOk || !kp.pass || h > 0.43) health[t] = 'warn';
+          }
+        } else {
+          let m = 0; for (let j = 0; j < p.n; j++) m += inWin[j]; m /= p.n;
+          let v = 0; for (let j = 0; j < p.n; j++) v += (inWin[j] - m) * (inWin[j] - m);
+          const sd = Math.sqrt(v / p.n);
+          zArr[t] = sd > 1e-9 ? (kf.innov[t] - m) / sd : 0;
+        }
+      }
+    }
+
+    const trades = [];
+    const equity = new Array(len).fill(0);
+    const pos = new Array(len).fill(0);
+    const signal = new Array(len).fill(null);
+    const executed = new Array(len).fill(null);
+    let cur = 0, entry = null, realized = 0, breakExits = 0;
+
+    function legVal(e, t) {
+      return (dg.aExec[t] - e.kIn * dg.bExec[t]) - (e.aIn - e.kIn * e.bIn);
+    }
+
+    for (let t = 0; t < len; t++) {
+      const z = zArr[t];
+      if (z !== null) {
+        if (cur !== 0 && p.diagMode === 'kalman_health' && health[t] === 'broken') {
+          const gross = cur * legVal(entry, t);
+          trades.push({
+            dir: cur, signalIn: entry.idx, entryIdx: entry.idx, exitIdx: t, signalOut: t,
+            bars: t - entry.idx, kIn: round2(entry.kIn),
+            entryZ: round2(entry.z), exitZ: round2(z),
+            gross, cost: p.cost, net: gross - p.cost, reason: 'break'
+          });
+          realized += gross - 0.5 * p.cost;
+          cur = 0; entry = null; breakExits++;
+          executed[t] = { type: 'close', reason: 'break' };
+        } else {
+          const held = cur !== 0 ? t - entry.idx : 0;
+          const rejectPrint = (p.diagMode === 'robust_tls' || p.diagMode === 'kalman_health') && Math.abs(z) > 4.2;
+          const canOpen = p.diagMode !== 'kalman_health' || health[t] !== 'broken';
+          const act = decide(cur, z, held, p);
+          if (act) {
+            signal[t] = act;
+            if (act.type === 'open') {
+              if (canOpen && !rejectPrint) {
+                cur = act.dir;
+                entry = { dir: cur, idx: t, aIn: dg.aExec[t], bIn: dg.bExec[t], kIn: kEst[t], z };
+                realized -= 0.5 * p.cost;
+                executed[t] = act;
+              }
+            } else if (cur !== 0) {
+              const gross = cur * legVal(entry, t);
+              trades.push({
+                dir: cur, signalIn: entry.idx, entryIdx: entry.idx, exitIdx: t, signalOut: t,
+                bars: t - entry.idx, kIn: round2(entry.kIn),
+                entryZ: round2(entry.z), exitZ: round2(z),
+                gross, cost: p.cost, net: gross - p.cost, reason: act.reason
+              });
+              realized += gross - 0.5 * p.cost;
+              cur = 0; entry = null;
+              executed[t] = act;
+            }
+          }
+        }
+      }
+      pos[t] = cur;
+      equity[t] = realized + (cur !== 0 ? cur * legVal(entry, t) : 0);
+    }
+    if (cur !== 0) {
+      const last = len - 1;
+      const gross = cur * legVal(entry, last);
+      trades.push({
+        dir: cur, signalIn: entry.idx, entryIdx: entry.idx, exitIdx: last, signalOut: last,
+        bars: last - entry.idx, kIn: round2(entry.kIn),
+        entryZ: round2(entry.z), exitZ: round2(zArr[last] || 0),
+        gross, cost: p.cost, net: gross - p.cost, reason: 'end'
+      });
+      realized += gross - 0.5 * p.cost;
+      pos[last] = 0; equity[last] = realized;
+      executed[last] = { type: 'close', reason: 'end' };
+    }
+    const m = metrics(trades, equity, pos);
+    return {
+      params: p, trades, equity, pos, signal, executed, breakExits,
+      kEst, aEst, spread, z: zArr, health, cusum: cs, kalman: kf, metrics: m
+    };
+  }
+
+  function explainDiag(dg, n, t, opts) {
+    if (t < n - 1) return null;
+    const o = Object.assign({ diagMode: 'kalman_health' }, opts || {});
+    const bt = backtestDiag(dg, { n, diagMode: o.diagMode });
+    const xWin = dg.b.slice(t - n + 1, t + 1);
+    const yWin = dg.a.slice(t - n + 1, t + 1);
+    const olsFit = ols(xWin, yWin);
+    const tlsFit = tls(xWin, yWin);
+    const tsFit = theilSen(xWin, yWin);
+    const kf = bt.kalman;
+    const checkLen = Math.min(t + 1, 70);
+    const innovTail = kf.innov.slice(t - checkLen + 1, t + 1);
+    const stMat = stationarityMatrix(innovTail);
+    const ertInfo = calcERT(innovTail);
+    return {
+      t, a: dg.a[t], b: dg.b[t], trueBeta: dg.trueBeta[t], isGlitch: dg.isGlitch[t],
+      olsK: olsFit.k, tlsK: tlsFit.k, tsK: tsFit.k,
+      priorAlpha: kf.priorAlpha[t], priorBeta: kf.priorBeta[t],
+      yhat: kf.priorAlpha[t] + kf.priorBeta[t] * dg.b[t],
+      innov: kf.innov[t], stdInnov: kf.stdInnov[t],
+      gainA: kf.gainA[t], gainB: kf.gainB[t],
+      postAlpha: kf.alpha[t], postBeta: kf.beta[t],
+      z: bt.z[t], health: bt.health[t], cusumScore: bt.cusum.score[t],
+      stMat, ertInfo
+    };
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
