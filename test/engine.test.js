@@ -480,4 +480,53 @@ for (const sc of E.TACTIC_SCENARIOS) {
   console.log('приёмы, «' + sc.name + '»: база ' + b.toFixed(0) + ', лог ' + lg.toFixed(0) + ', разворот ' + rv.toFixed(0) + ', лесенка ' + sl.toFixed(0) + ', фильтр_σ ' + vf.toFixed(0));
 }
 
+// 32. Межбиржевой и валютный спред (#40): паритет, тождество 3 ног и отсутствие заглядывания в будущее.
+{
+  // Золото: 2650 $/унц × 90 ₽/$ ÷ 31,1035 г/унц ≈ 7667,95 ₽/г
+  close(E.fxParity(2650, 90, 31.1035), (2650 * 90) / 31.1035, 1e-9);
+  close(E.fxParity(100, 92, 100), 92, 1e-9);
+
+  const fxD = E.genFxScenario(7, E.FX_SCENARIOS[1]);
+  for (const mode of ['noFx', 'stale', 'hedged']) {
+    const bt = E.backtestFx(fxD, { fxMode: mode, cost: 0.6, fxCostMult: 1.35 });
+    close(bt.equity[bt.equity.length - 1], bt.metrics.total, 1e-6);
+    bt.trades.forEach((tr) => {
+      close(tr.gross, tr.pnlDom + tr.pnlWorldRub + tr.pnlFxRub, 1e-9);
+      if (mode !== 'noFx') {
+        // Сумма трёх ног с точностью до копеечного округления паритета равна изменению синхронного спреда
+        const exactSIn = tr.domIn - (tr.worldIn * tr.fxIn) / 100;
+        const exactSOut = tr.domOut - (tr.worldOut * tr.fxOut) / 100;
+        close(tr.gross, tr.dir * (exactSOut - exactSIn), 1e-9);
+      } else {
+        assert.strictEqual(tr.pnlFxRub, 0);
+      }
+    });
+  }
+
+  // Отсутствие заглядывания в будущее
+  const cut = 175;
+  const sub = {};
+  ['pWorld', 'fx', 'parity', 'pDom', 'syncSpread', 'pWorldObs', 'obsSpread', 'isStale'].forEach((k) => { sub[k] = fxD[k].slice(0, cut); });
+  for (const mode of ['noFx', 'stale', 'hedged']) {
+    const b1 = E.backtestFx(fxD, { fxMode: mode });
+    const b2 = E.backtestFx(sub, { fxMode: mode });
+    for (let i = 0; i < cut - 1; i++) {
+      assert.strictEqual(b1.pos[i], b2.pos[i]);
+      close(b1.equity[i], b2.equity[i], 1e-9);
+    }
+  }
+}
+
+// 33. Сводка по межбиржевому и валютному спреду (смотрим глазами).
+for (const sc of E.FX_SCENARIOS) {
+  let nf = 0, st = 0, hg = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const d = E.genFxScenario(sd, sc);
+    nf += E.backtestFx(d, { fxMode: 'noFx' }).metrics.total;
+    st += E.backtestFx(d, { fxMode: 'stale' }).metrics.total;
+    hg += E.backtestFx(d, { fxMode: 'hedged' }).metrics.total;
+  });
+  console.log('межбиржевой FX, «' + sc.name + '»: 2 ноги без FX ' + nf.toFixed(0) + ', несинхр. ' + st.toFixed(0) + ', 3 ноги ' + hg.toFixed(0));
+}
+
 console.log('OK: все проверки пройдены');

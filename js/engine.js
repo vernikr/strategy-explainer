@@ -1127,7 +1127,187 @@
     }, ex);
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  /* ---------- Межбиржевой и валютный спред (#40) ---------- */
+  /* Паритетная цена актива в валюте внутренней площадки: (цена_мир × курс_FX) ÷ делитель_единиц. */
+  function fxParity(pWorld, fx, unitDiv) {
+    return (pWorld * fx) / (unitDiv || 1);
+  }
+
+  /* Генератор межбиржевого валютного спреда (n = 320 дней):
+     - pWorld[t]: мировая цена актива в $ (около 100 $);
+     - fx[t]: курс в ₽ за 1 $ (около 90 ₽/$);
+     - parity[t] = pWorld[t] * fx[t] / 100: паритетная цена в пунктах (1 пункт = 100 ₽);
+     - pDom[t]: цена внутреннего рублёвого фьючерса в пунктах (по 100 ₽) в общие часы работы обеих бирж;
+     - syncSpread[t] = pDom[t] − parity[t]: истинный синхронный спред;
+     - pWorldObs[t], obsSpread[t]: видимые закрытия дня (когда внешняя площадка закрылась раньше вечерней сессии, pWorldObs отстаёт). */
+  function genFxSpread(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320, world0: 100, fx0: 90,
+      worldStep: 1.1, fxDrift: 0, fxSurge: null, fxStep: 0.45,
+      basePrem: 1.5, fxPanicPrem: 0, reversion: 0.24, noise: 2.1,
+      staleProb: 0, staleShock: 0, barrierAt: null, barrierShift: 0
+    }, opts || {});
+    const rng = mulberry32(o.seed * 37 + 13);
+    const gauss = makeGauss(rng);
+
+    const pWorld = [], fx = [], parity = [], pDom = [], syncSpread = [];
+    const pWorldObs = [], obsSpread = [], isStale = [];
+    let w = o.world0, rate = o.fx0, u = 0;
+
+    for (let t = 0; t < o.n; t++) {
+      if (t > 0) {
+        w = Math.max(25, w + o.worldStep * gauss());
+        const surge = o.fxSurge && t >= o.fxSurge[0] && t <= o.fxSurge[1] ? o.fxSurge[2] : o.fxDrift;
+        rate = Math.max(30, rate * Math.exp(surge + (o.fxStep / 90) * gauss()));
+      }
+      const inBar = o.barrierAt !== null && t >= o.barrierAt;
+      const rev = inBar ? 0.03 : o.reversion;
+      const inSurge = o.fxSurge && t >= o.fxSurge[0] && t <= o.fxSurge[1];
+      const fxPush = inSurge ? o.fxPanicPrem : 0;
+      u += -rev * u + o.noise * gauss() + fxPush;
+      const bar = inBar ? o.barrierShift * Math.min(1, (t - o.barrierAt + 1) / 36) : 0;
+
+      const wR = round2(w), fxR = round2(rate);
+      const par = round2((wR * fxR) / 100);
+      const sp = round2(o.basePrem + u + bar);
+      const dom = round2(par + sp);
+
+      let staleToday = false, wObs = wR;
+      if (o.staleProb > 0 && t > 5 && rng() < o.staleProb) {
+        staleToday = true;
+        const shockUsd = (rng() < 0.5 ? 1 : -1) * (0.65 + 0.7 * rng()) * o.staleShock;
+        wObs = round2(Math.max(20, wR - shockUsd));
+      }
+      const obsPar = round2((wObs * fxR) / 100);
+      const spObs = round2(dom - obsPar);
+
+      pWorld.push(wR); fx.push(fxR); parity.push(par); pDom.push(dom);
+      syncSpread.push(round2(dom - par));
+      pWorldObs.push(wObs); obsSpread.push(spObs); isStale.push(staleToday);
+    }
+    return { pWorld, fx, parity, pDom, syncSpread, pWorldObs, obsSpread, isStale, opts: o };
+  }
+
+  const FX_SCENARIOS = [
+    { id: 'calm', name: 'Спокойный курс и синхронные часы', opts: { fxDrift: 0, fxStep: 0.35, staleProb: 0 }, note: 'Курс рубля колеблется в узком коридоре около 90 ₽/$, обе биржи сверяются строго в один и тот же час.' },
+    { id: 'fxtrend', name: 'Валютное ралли и защитная премия', opts: { fxSurge: [70, 205, 0.0062], fxStep: 2.2, fxPanicPrem: 1.15, reversion: 0.15, staleProb: 0 }, note: 'Курс доллара растёт волной с 90 выше 180 ₽/$; на скачках курса внутренние покупатели временно переплачивают премию за защитный актив.' },
+    { id: 'desync', name: 'Разные часы закрытия (вечерние скачки)', opts: { fxDrift: 0, fxStep: 0.45, staleProb: 0.28, staleShock: 6.5 }, note: 'Примерно раз в 3–4 дня после закрытия внешней биржи выходит новость: внутренняя вечерняя сессия уже сдвинулась, а внешняя котировка осталась дневной.' },
+    { id: 'barrier', name: 'Инфраструктурный барьер на 145-м дне', opts: { fxDrift: 0.0004, fxStep: 0.5, barrierAt: 145, barrierShift: -44 }, note: 'Со 145-го дня вводятся ограничения на переток капитала и товара между странами: внутренний рынок уходит в глубокий устойчивый дисконт к мировому паритету.' }
+  ];
+  const genFxScenario = (seed, scn) => genFxSpread(Object.assign({ seed }, scn.opts));
+
+  /* Симулятор межбиржевого и валютного спреда:
+     fxMode = 'noFx'   — 2 ноги (внутренняя ₽ и внешняя $) без валютного фьючерса (издержки = cost);
+     fxMode = 'stale'  — 3 ноги с FX-хеджем, но сигнал считается по несинхронным закрытиям obsSpread (исполнение по реальным ценам, издержки = cost * fxCostMult);
+     fxMode = 'hedged' — 3 ноги с FX-хеджем и сигналом строго по синхронному срезу syncSpread. */
+  function backtestFx(fxData, params) {
+    const p = Object.assign({}, DEFAULTS, { fxMode: 'hedged', fxCostMult: 1.35 }, params || {});
+    const sigSeries = p.fxMode === 'stale' ? fxData.obsSpread : fxData.syncSpread;
+    const st = rolling(sigSeries, p.n);
+    const len = sigSeries.length;
+    const fee = p.fxMode === 'noFx' ? p.cost : p.cost * p.fxCostMult;
+
+    const trades = [];
+    const equity = new Array(len).fill(0);
+    const pos = new Array(len).fill(0);
+    const signal = new Array(len).fill(null);
+    const executed = new Array(len).fill(null);
+    let cur = 0, entry = null, realized = 0, pending = null;
+
+    function legsPnl(e, t) {
+      const parIn = (e.worldIn * e.fxIn) / 100;
+      const parOut = (fxData.pWorld[t] * fxData.fx[t]) / 100;
+      const dDom = e.dir * (fxData.pDom[t] - e.domIn);
+      const dWorldUsd = -e.dir * (fxData.pWorld[t] - e.worldIn);
+      const dWorldRub = (dWorldUsd * fxData.fx[t]) / 100;
+      const dFxRub = p.fxMode === 'noFx' ? 0 : (-e.dir * e.worldIn * (fxData.fx[t] - e.fxIn)) / 100;
+      // При точном курсе без промежуточного округления: dWorldRub + dFxRub ≡ -dir * (parOut - parIn)
+      const gross = dDom + dWorldRub + dFxRub;
+      return { dDom, dWorldUsd, dWorldRub, dFxRub, parIn, parOut, gross };
+    }
+
+    function openAt(act, t, sigIdx) {
+      cur = act.dir;
+      entry = {
+        dir: act.dir, execIdx: t, signalIdx: sigIdx,
+        domIn: fxData.pDom[t], worldIn: fxData.pWorld[t], fxIn: fxData.fx[t],
+        syncIn: fxData.syncSpread[t], obsIn: fxData.obsSpread[t], z: st.z[sigIdx]
+      };
+      realized -= fee;
+      executed[t] = act;
+    }
+
+    function closeAt(act, t, sigIdx) {
+      const lg = legsPnl(entry, t);
+      trades.push({
+        dir: entry.dir, signalIn: entry.signalIdx, entryIdx: entry.execIdx, exitIdx: t, signalOut: sigIdx,
+        domIn: entry.domIn, domOut: fxData.pDom[t],
+        worldIn: entry.worldIn, worldOut: fxData.pWorld[t],
+        fxIn: entry.fxIn, fxOut: fxData.fx[t],
+        entryS: entry.syncIn, exitS: fxData.syncSpread[t],
+        obsIn: entry.obsIn, obsOut: fxData.obsSpread[t],
+        entryZ: entry.z, exitZ: st.z[sigIdx],
+        pnlDom: lg.dDom, pnlWorldUsd: lg.dWorldUsd, pnlWorldRub: lg.dWorldRub, pnlFxRub: lg.dFxRub,
+        reason: act.reason, gross: lg.gross, cost: fee, net: lg.gross - fee, bars: t - entry.execIdx
+      });
+      realized += lg.gross;
+      cur = 0; entry = null;
+      executed[t] = act;
+    }
+
+    for (let t = 0; t < len; t++) {
+      if (pending) {
+        if (pending.act.type === 'open') openAt(pending.act, t, pending.signalIdx);
+        else if (cur !== 0) closeAt(pending.act, t, pending.signalIdx);
+        pending = null;
+      }
+      if (st.z[t] !== null) {
+        const held = cur !== 0 ? t - entry.execIdx : 0;
+        const act = decide(cur, st.z[t], held, p);
+        if (act) {
+          signal[t] = act;
+          if (p.delay === 0) {
+            if (act.type === 'open') openAt(act, t, t);
+            else closeAt(act, t, t);
+          } else if (t < len - 1) {
+            pending = { act, signalIdx: t };
+          }
+        }
+      }
+      pos[t] = cur;
+      equity[t] = realized + (cur !== 0 ? legsPnl(entry, t).gross : 0);
+    }
+    if (cur !== 0) {
+      const last = len - 1;
+      closeAt({ type: 'close', reason: 'end' }, last, last);
+      pos[last] = 0;
+      equity[last] = realized;
+    }
+
+    return {
+      params: p, trades, equity, pos, signal, executed,
+      sigSeries, mean: st.mean, std: st.std, z: st.z, metrics: metrics(trades, equity, pos)
+    };
+  }
+
+  function explainFx(fxData, n, t, opts) {
+    if (t < n - 1) return null;
+    const o = Object.assign({ fxMode: 'hedged' }, opts || {});
+    const sigSeries = o.fxMode === 'stale' ? fxData.obsSpread : fxData.syncSpread;
+    const ex = explainBar(sigSeries, n, t);
+    return Object.assign({
+      dom: fxData.pDom[t],
+      world: fxData.pWorld[t],
+      worldObs: fxData.pWorldObs[t],
+      fx: fxData.fx[t],
+      parity: fxData.parity[t],
+      syncSpread: fxData.syncSpread[t],
+      obsSpread: fxData.obsSpread[t],
+      isStale: fxData.isStale[t]
+    }, ex);
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
