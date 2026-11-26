@@ -38,7 +38,7 @@ if (!fs.existsSync(CHROME)) {
     return { dom: r.stdout || '', errs };
   };
   const onlyList = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const stratIds = (onlyList || ['zscore', 'ewma', 'robust', 'hedge', 'coint', 'calendar', 'tactics', 'fx']).filter((x) => x !== 'baskets');
+  const stratIds = onlyList || ['zscore', 'ewma', 'robust', 'hedge', 'coint', 'calendar', 'tactics', 'fx', 'baskets'];
   stratIds.forEach((id) => {
     const first = dump(id + '/1');
     const titles = [...first.dom.matchAll(/<button class="step[^"]*" data-i="\d+"><span class="num">\d+<\/span><span>([^<]*)<\/span>/g)].map((x) => x[1]);
@@ -62,12 +62,7 @@ if (!fs.existsSync(CHROME)) {
       else console.log('  ✓ ' + label);
     });
   });
-  if (!onlyList || onlyList.includes('baskets')) {
-    const rb = dump('baskets');
-    const h1 = (rb.dom.match(/<h1>([^<]*)<\/h1>/) || [])[1];
-    if (rb.errs.length || h1 !== 'Корзины 3+' || !/В разработке/.test(rb.dom)) fail('baskets (план) — ошибка рендера заглушки');
-    else console.log('  ✓ baskets «Корзины 3+» (план-заглушка)');
-  }
+
 }
 
 console.log(failed ? '\nПРОВАЛЕНО: ' + failed : '\nOK: смоук-тест пройден');

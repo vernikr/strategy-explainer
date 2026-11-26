@@ -1409,13 +1409,14 @@
     const a = [], b = [], c = [], trueSpread = [];
     let f1 = 100, f2 = 0, ib = 0, ic = 0, u = 0;
     let rwA = 100, rwB = 100, rwC = 100;
+    const dA = o.pureNoise ? 0.16 * (rng() < 0.5 ? 1 : -1) : 0, dB = o.pureNoise ? -0.11 * (rng() < 0.5 ? 1 : -1) : 0, dC = o.pureNoise ? 0.09 * (rng() < 0.5 ? 1 : -1) : 0;
 
     for (let t = 0; t < o.n; t++) {
       if (o.pureNoise) {
         if (t > 0) {
-          rwA = Math.max(20, rwA + o.rwStep * gauss());
-          rwB = Math.max(20, rwB + o.rwStep * gauss());
-          rwC = Math.max(20, rwC + o.rwStep * gauss());
+          rwA = Math.max(20, rwA + dA + o.rwStep * gauss());
+          rwB = Math.max(20, rwB + dB + o.rwStep * gauss());
+          rwC = Math.max(20, rwC + dC + o.rwStep * gauss());
         }
         a.push(round2(rwA)); b.push(round2(rwB)); c.push(round2(rwC));
         trueSpread.push(round2(rwA - 0.5 * rwB - 0.5 * rwC));
