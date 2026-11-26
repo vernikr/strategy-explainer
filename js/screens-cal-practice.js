@@ -384,6 +384,7 @@
                 <button class="b" id="bn">День вперёд ▶</button>
                 <button class="b" id="br">К следующему роллу ◆</button>
                 <button class="b" id="bs">К следующей сделке</button>
+                <button class="b" id="play">▶ Автопроигрывание</button>
               </div>
               <div id="c1" style="margin-top:10px"></div>
               <div id="c2" style="margin-top:10px"></div>
@@ -391,7 +392,7 @@
             <div id="ctl"></div>
           </div>
           <div>
-            <div class="calc-steps" id="steps"></div>
+            <div class="viz"><div class="calc-steps" id="steps"></div></div>
             <details style="margin-top:14px"><summary>Показать все N дней расчётного окна</summary>
               <div class="scroll" style="margin-top:8px"><table class="t" id="wtab"></table></div>
             </details>
@@ -424,6 +425,14 @@
       el.querySelector('#bs').addEventListener('click', () => {
         for (let i = s7.day + 1; i < cal.raw.length; i++) if (bt.signal[i]) return setDay(i);
         for (let i = A.state.params.n - 1; i <= s7.day; i++) if (bt.signal[i]) return setDay(i);
+      });
+      el.querySelector('#play').addEventListener('click', (ev) => {
+        if (window.__stepTimer) { clearInterval(window.__stepTimer); window.__stepTimer = null; ev.target.textContent = '▶ Автопроигрывание'; return; }
+        ev.target.textContent = '❚❚ Пауза';
+        window.__stepTimer = setInterval(() => {
+          if (s7.day >= cal.raw.length - 1) { clearInterval(window.__stepTimer); window.__stepTimer = null; ev.target.textContent = '▶ Автопроигрывание'; return; }
+          s7.day++; draw();
+        }, 350);
       });
 
       function draw() {
@@ -497,25 +506,26 @@
         }
 
         el.querySelector('#steps').innerHTML = `
-          <div class="step"><div class="num">1</div><div class="body">
-            <div class="t">Контрактная серия и сырой спред дня ${t + 1}</div>
-            <div>Активная пара: <b>«${ex.seriesName}»</b>, до экспирации ближнего фьючерса <b>${ex.daysToExp} дн.</b><br>
-            Ближний = <b>${f(ex.near)}</b>, Дальний = <b>${f(ex.far)}</b> → сырой спред (Дальний − Ближний) = <b>${f(ex.raw)}</b> п. (${ex.raw >= 0 ? 'контанго' : 'бэквордация'}).${rollLine}</div>
+          <div class="row"><div class="n">1</div><div>
+            <b>Контрактная серия и сырой спред дня ${t + 1}</b>
+            <div style="color:#98a3b6;font-size:14px">Активная пара: <b>«${ex.seriesName}»</b>, до экспирации ближнего фьючерса <b>${ex.daysToExp} дн.</b> (${ex.raw >= 0 ? 'контанго' : 'бэквордация'}).${rollLine}</div>
+            <div class="v">Ближний = ${f(ex.near)}, Дальний = ${f(ex.far)} → сырой спред = <b>${f(ex.raw)}</b> п.</div>
           </div></div>
-          <div class="step"><div class="num">2</div><div class="body">
-            <div class="t">Склейка серий и сезонная поправка (режим «${mInfo.name}»)</div>
-            <div>${step2Html}</div>
+          <div class="row"><div class="n">2</div><div>
+            <b>Склейка серий и сезонная поправка (режим «${mInfo.name}»)</b>
+            <div style="color:#98a3b6;font-size:14px">${step2Html}</div>
+            <div class="v">Рабочее число для окна = <b>${f(ex.value)}</b> п.</div>
           </div></div>
-          <div class="step"><div class="num">3</div><div class="body">
-            <div class="t">Среднее и разброс σ за последние N = ${p.n} дней (дни ${w0 + 1}–${t + 1})</div>
-            <div class="math">Среднее = ${f(ex.sum)} ÷ ${p.n} = <b>${f(ex.mean)}</b>, &nbsp; σ = √(${f(ex.sumSq)} ÷ ${p.n}) = <b>${f(ex.std)}</b></div>
+          <div class="row"><div class="n">3</div><div>
+            <b>Среднее и разброс σ за последние N = ${p.n} дней (дни ${w0 + 1}–${t + 1})</b>
+            <div class="v">Среднее = ${f(ex.sum)} ÷ ${p.n} = <b>${f(ex.mean)}</b>, &nbsp; σ = √(${f(ex.sumSq)} ÷ ${p.n}) = <b>${f(ex.std)}</b></div>
           </div></div>
-          <div class="step"><div class="num">4</div><div class="body">
-            <div class="t">Отклонение в сигмах (z-score)</div>
-            <div class="math">z = (${f(ex.value)} − ${f(ex.mean)}) ÷ ${f(ex.std)} = <b>${f(ex.z)}</b></div>
+          <div class="row"><div class="n">4</div><div>
+            <b>Отклонение в сигмах (z-score)</b>
+            <div class="v">z = (${f(ex.value)} − ${f(ex.mean)}) ÷ ${f(ex.std)} = <b>${f(ex.z)}</b></div>
           </div></div>
-          <div class="step"><div class="num">5</div><div class="body">
-            <div class="t">Решение и работа с экспирацией (до этого дня: ${posName})</div>
+          <div class="row"><div class="n">5</div><div>
+            <b>Решение и работа с экспирацией (до этого дня: ${posName})</b>
             <div class="${decCls}">${decText}</div>
           </div></div>`;
 
