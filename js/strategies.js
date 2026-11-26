@@ -2,7 +2,7 @@
 window.STRATEGIES = [
   { id: 'zscore', name: 'Z-score', badge: 'база', ready: true },
   { id: 'ewma', name: 'EWMA', badge: 'готово', ready: true },
-  { id: 'robust', name: 'Робастный z', badge: 'новое', ready: true },
+  { id: 'robust', name: 'Робастный z', badge: 'готово', ready: true },
   {
     id: 'hedge', name: 'Динамический хедж', badge: 'скоро', ready: false,
     lead: 'Спред строится не как A − B, а как A − k·B, где коэффициент k пересчитывается по свежим данным.',
