@@ -709,4 +709,51 @@ for (const sc of E.MOEX_SCENARIOS) {
   });
 }
 
+// 40. Модель OU, оптимальные границы Бертрама, волю-адаптивные полосы и carry-overlay (#59, #48).
+{
+  const bLow = E.bertramBands(0.18, 2.0, 0.20);
+  const bMid = E.bertramBands(0.18, 2.0, 0.90);
+  const bHigh = E.bertramBands(0.18, 2.0, 2.40);
+  assert.ok(bLow.entryZ <= bMid.entryZ && bMid.entryZ <= bHigh.entryZ && bLow.entryZ < bHigh.entryZ);
+  assert.ok(bLow.rate100d > bHigh.rate100d && bHigh.hystZ >= 0.35);
+
+  const bd = E.genBand({ seed: 11, n: 260, phi: 0.80, sdCalm: 1.6, sdStorm: 1.6 });
+  const ou = E.ouFit(bd.clean);
+  assert.ok(ou.theta > 0.12 && ou.theta < 0.35 && ou.halfLife > 1.5 && ou.halfLife < 6.0);
+
+  const ov = E.carryOverlayBands(1.5, 0.3, 0.38, 1.4, 6.0);
+  assert.ok(ov.shortEntry < 1.5 && ov.longEntry > 1.5 && ov.blockLong);
+  assert.strictEqual(ov.label, 'drift_against_long');
+}
+
+// 41. Каузальность backtestBands и сводка 4 сценария × 11 историй (#59, #48).
+{
+  const bd = E.genBandScenario(7, E.BAND_SCENARIOS[2]);
+  ['no_hyst', 'fixed_2s', 'vol_adapt', 'ou_carry_pro'].forEach((md) => {
+    const full = E.backtestBands(bd, { bandMode: md });
+    const cutBd = {
+      clean: bd.clean.slice(0, 185), raw: bd.raw.slice(0, 185),
+      inStorm: bd.inStorm.slice(0, 185), opts: bd.opts
+    };
+    const part = E.backtestBands(cutBd, { bandMode: md });
+    for (let i = 0; i < 184; i++) {
+      assert.strictEqual(full.pos[i], part.pos[i]);
+      close(full.upBand[i] || 0, part.upBand[i] || 0, 1e-9);
+    }
+  });
+
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  E.BAND_SCENARIOS.forEach((sc) => {
+    let tNh = 0, tFx = 0, tVa = 0, tOu = 0;
+    seeds.forEach((sd) => {
+      const d = E.genBandScenario(sd, sc);
+      tNh += E.backtestBands(d, { bandMode: 'no_hyst' }).metrics.total;
+      tFx += E.backtestBands(d, { bandMode: 'fixed_2s' }).metrics.total;
+      tVa += E.backtestBands(d, { bandMode: 'vol_adapt' }).metrics.total;
+      tOu += E.backtestBands(d, { bandMode: 'ou_carry_pro' }).metrics.total;
+    });
+    console.log('полосы OU, «' + sc.name + '»: без гист. ' + tNh.toFixed(0) + ', 2σ ' + tFx.toFixed(0) + ', волю-адапт. ' + tVa.toFixed(0) + ', Бертрам+Carry ' + tOu.toFixed(0));
+  });
+}
+
 console.log('OK: все проверки пройдены');

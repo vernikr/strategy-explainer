@@ -2398,7 +2398,322 @@
     };
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+
+  /* ---------- Модельные пороги OU (границы Бертрама), волю-адаптивные полосы и carry-overlay (#59, #48) ---------- */
+  function normCdf(x) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(x));
+    const d = 0.3989422804014327 * Math.exp(-0.5 * x * x);
+    const p = d * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + 1.330274429 * t))));
+    return x >= 0 ? 1 - p : p;
+  }
+
+  /* Предвычисленные первообразные Зигерта — Бертрама для мгновенного O(1) расчёта времён достижения процесса OU. */
+  const OU_GRID_MIN = -4.0, OU_GRID_STEP = 0.01, OU_GRID_N = 801;
+  const OU_F = new Float64Array(OU_GRID_N);
+  const OU_G = new Float64Array(401);
+  {
+    const rt2pi = Math.sqrt(2 * Math.PI);
+    let accF = 0;
+    for (let i = 1; i < OU_GRID_N; i++) {
+      const u0 = OU_GRID_MIN + (i - 1) * OU_GRID_STEP, u1 = u0 + OU_GRID_STEP, um = 0.5 * (u0 + u1);
+      const f0 = rt2pi * Math.exp(0.5 * u0 * u0) * normCdf(u0);
+      const fm = rt2pi * Math.exp(0.5 * um * um) * normCdf(um);
+      const f1 = rt2pi * Math.exp(0.5 * u1 * u1) * normCdf(u1);
+      accF += (OU_GRID_STEP / 6) * (f0 + 4 * fm + f1);
+      OU_F[i] = accF;
+    }
+    let accG = 0;
+    for (let i = 1; i <= 400; i++) {
+      const x0 = (i - 1) * OU_GRID_STEP, x1 = x0 + OU_GRID_STEP, xm = 0.5 * (x0 + x1);
+      const g0 = rt2pi * Math.exp(0.5 * x0 * x0) * (normCdf(x0) - 0.5);
+      const gm = rt2pi * Math.exp(0.5 * xm * xm) * (normCdf(xm) - 0.5);
+      const g1 = rt2pi * Math.exp(0.5 * x1 * x1) * (normCdf(x1) - 0.5);
+      accG += (OU_GRID_STEP / 6) * (g0 + 4 * gm + g1);
+      OU_G[i] = accG;
+    }
+  }
+  function interpOuF(u) {
+    const c = Math.max(-4, Math.min(4, u));
+    const pos = (c - OU_GRID_MIN) / OU_GRID_STEP;
+    const idx = Math.min(OU_GRID_N - 2, Math.max(0, Math.floor(pos)));
+    return OU_F[idx] + (pos - idx) * (OU_F[idx + 1] - OU_F[idx]);
+  }
+  function interpOuG(x) {
+    const c = Math.max(0, Math.min(4, x));
+    const pos = c / OU_GRID_STEP;
+    const idx = Math.min(399, Math.max(0, Math.floor(pos)));
+    return OU_G[idx] + (pos - idx) * (OU_G[idx + 1] - OU_G[idx]);
+  }
+
+  /* Оценка параметров непрерывного процесса Орнштейна — Уленбека dX = θ(μ − X)dt + σ_ou dW по дискретному ряду. */
+  function ouFit(series) {
+    const n = series.length;
+    if (n < 10) return { theta: 0.15, halfLife: Math.LN2 / 0.15, mu: 0, sigmaEq: 1.5, sigmaOu: 1.0, phi: 0.86 };
+    const xPrev = series.slice(0, n - 1), xNext = series.slice(1, n);
+    const fit = ols(xPrev, xNext);
+    const phi = Math.max(0.08, Math.min(0.985, fit.k));
+    const theta = -Math.log(phi);
+    const mu = Math.abs(1 - phi) > 1e-4 ? fit.alpha / (1 - phi) : fit.my;
+    const resVar = fit.rss / Math.max(1, n - 2);
+    const sigmaEq = Math.sqrt(Math.max(1e-6, resVar / Math.max(0.02, 1 - phi * phi)));
+    const sigmaOu = sigmaEq * Math.sqrt(2 * theta);
+    return { theta, halfLife: Math.LN2 / theta, mu, sigmaEq, sigmaOu, phi };
+  }
+
+  /* Точные модельные метрики одного торгового цикла OU (Bertram 2010): ожидание времени в сделке, ожидания входа и скорости прибыли. */
+  function ouCycleMetrics(entryZ, exitZ, theta, sigmaEq, costPts) {
+    const a = entryZ, m = exitZ;
+    if (a <= m + 0.03 || theta <= 0 || sigmaEq <= 0) {
+      return { holdDays: 999, waitDays: 999, cycleDays: 1998, netPerTrade: -costPts, ratePerDay: -costPts, rate100d: -100 * costPts };
+    }
+    const holdDays = Math.max(0.2, (interpOuF(-m) - interpOuF(-a)) / theta);
+    const mAbs = Math.min(a - 0.02, Math.abs(m));
+    const waitDays = Math.max(0.1, (interpOuG(a) - interpOuG(mAbs)) / theta);
+    const cycleDays = holdDays + waitDays;
+    const netPerTrade = (a - m) * sigmaEq - costPts;
+    const ratePerDay = netPerTrade / cycleDays;
+    return { holdDays, waitDays, cycleDays, netPerTrade, ratePerDay, rate100d: ratePerDay * 100 };
+  }
+
+  /* Оптимальные по модели OU границы Бертрама под заданные (θ, σ_eq, c): шире издержки c → шире оптимальный порог входа. */
+  function bertramBands(theta, sigmaEq, costPts, opts) {
+    const o = Object.assign({ minHyst: 0.35, holdPenalty: 0.05 }, opts || {});
+    let best = null;
+    for (let m = 0.0; m <= 0.80; m += 0.10) {
+      for (let a = Math.max(0.70, m + o.minHyst); a <= 3.10; a += 0.10) {
+        const met = ouCycleMetrics(a, m, theta, sigmaEq, costPts);
+        const adjNet = met.netPerTrade - o.holdPenalty * sigmaEq * (met.holdDays / 10);
+        const score = (adjNet / met.cycleDays) / Math.sqrt(1 + 0.04 * met.holdDays);
+        if (!best || score > best.score) {
+          best = Object.assign({ entryZ: round2(a), exitZ: round2(m), hystZ: round2(a - m), score }, met);
+        }
+      }
+    }
+    return best;
+  }
+
+  /* Волю-адаптивные полосы (Стратегия C): плавное сужение в тихий рынок и расширение при всплеске волатильности (EWMA/GARCH-логика). */
+  function volAdaptiveBands(series, opts) {
+    const o = Object.assign({ baseEntry: 1.75, baseExit: 0.30, gamma: 0.85, minMult: 0.65, maxMult: 1.95 }, opts || {});
+    const n = series.length;
+    const fastVol = new Array(n).fill(null), slowVol = new Array(n).fill(null);
+    const mult = new Array(n).fill(1), entryBand = new Array(n).fill(o.baseEntry), exitBand = new Array(n).fill(o.baseExit);
+    if (!n) return { fastVol, slowVol, mult, entryBand, exitBand };
+    let vFast = 1.5, vSlow = 1.5;
+    for (let t = 1; t < n; t++) {
+      const r = series[t] - series[t - 1], r2 = r * r;
+      vFast = 0.24 * r2 + 0.76 * vFast;
+      vSlow = 0.025 * r2 + 0.975 * vSlow;
+      const sf = Math.sqrt(Math.max(1e-6, vFast)), ss = Math.sqrt(Math.max(1e-6, vSlow));
+      fastVol[t] = sf; slowVol[t] = ss;
+      const m = Math.max(o.minMult, Math.min(o.maxMult, Math.pow(sf / ss, o.gamma)));
+      mult[t] = m;
+      entryBand[t] = round2(o.baseEntry * m);
+      exitBand[t] = round2(o.baseExit * Math.min(1.25, m));
+    }
+    return { fastVol, slowVol, mult, entryBand, exitBand };
+  }
+
+  /* Carry-overlay: асимметричные пороги по знаку систематического переноса и блокировка входа против сильного дрейфа. */
+  function carryOverlayBands(baseEntryZ, baseExitZ, dailyCarry, sigmaEq, holdDaysEst) {
+    const safeSig = Math.max(0.25, sigmaEq);
+    const expectedCarryPts = dailyCarry * Math.max(2, holdDaysEst || 6);
+    const carryInSigma = expectedCarryPts / safeSig;
+    const shift = Math.min(0.85, Math.abs(carryInSigma) * 0.65);
+    let shortEntry = baseEntryZ, longEntry = baseEntryZ;
+    let blockLong = false, blockShort = false, label = 'neutral';
+    if (dailyCarry > 0.01) {
+      shortEntry = Math.max(0.80, baseEntryZ - shift * 0.65);
+      longEntry = baseEntryZ + shift * 1.20;
+      if (carryInSigma > 0.55 * baseEntryZ) { blockLong = true; label = 'drift_against_long'; }
+      else label = 'short_favored';
+    } else if (dailyCarry < -0.01) {
+      longEntry = Math.max(0.80, baseEntryZ - shift * 0.65);
+      shortEntry = baseEntryZ + shift * 1.20;
+      if (-carryInSigma > 0.55 * baseEntryZ) { blockShort = true; label = 'drift_against_short'; }
+      else label = 'long_favored';
+    }
+    return {
+      shortEntry: round2(shortEntry), longEntry: round2(longEntry), exitZ: round2(baseExitZ),
+      carryInSigma: round2(carryInSigma), blockLong, blockShort, label
+    };
+  }
+
+  const BAND_SCENARIOS = [
+    {
+      id: 'fast_tight_cost',
+      name: 'Быстрая пружина и низкая комиссия (t½ ≈ 3,1 дн., c = 0,30 п.)',
+      opts: { phi: 0.80, sdCalm: 1.6, sdStorm: 1.6, stormStart: -1, stormEnd: -1, cost: 0.30, dailyCarry: 0 },
+      note: 'Спред быстро сходится при скромных издержках: шаблон «ждать 2,0σ» упускает две трети рабочих движений, а границы Бертрама опускают порог к ~1,0σ с правильным зазором гистерезиса.'
+    },
+    {
+      id: 'heavy_friction',
+      name: 'Тяжёлые издержки широкого стакана (c = 2,20 п. на круг)',
+      opts: { phi: 0.88, sdCalm: 1.25, sdStorm: 1.25, stormStart: -1, stormEnd: -1, cost: 2.20, dailyCarry: 0 },
+      note: 'Высокое трение стакана: узкий зазор без гистерезиса превращается в убыточную «пилу» на комиссиях, тогда как модель Бертрама автоматически раздвигает полосы под дорогую сделку.'
+    },
+    {
+      id: 'vol_clusters',
+      name: 'Кластеры волатильности: тихий плёс и бурный шторм',
+      opts: { phi: 0.87, sdCalm: 0.70, sdStorm: 3.80, stormStart: 100, stormEnd: 220, cost: 0.95, dailyCarry: 0 },
+      note: 'Полгода спред еле шевелится, а в середине года налетает шторм с двойным проскальзыванием. Волю-адаптивные полосы сжимаются в штиль и расширяются в бурю, обходя неподвижный шаблон 2σ.'
+    },
+    {
+      id: 'strong_carry',
+      name: 'Сильный перенос в пользу шорта (+0,38 п./день)',
+      opts: { phi: 0.87, sdCalm: 1.35, sdStorm: 1.35, stormStart: -1, stormEnd: -1, cost: 0.65, dailyCarry: 0.38 },
+      note: 'Устойчивый контанго-перенос тянет сырой спред вниз: наивные стратегии путают плановый дрейф с «дешёвой ценой» и покупают против течения, а Carry-overlay блокирует встречный вход и собирает премию.'
+    }
+  ];
+
+  function genBand(opts) {
+    const o = Object.assign({
+      seed: 7, n: 320, phi: 0.78, sdCalm: 1.8, sdStorm: 1.8,
+      stormStart: -1, stormEnd: -1, cost: 0.45, dailyCarry: 0
+    }, opts || {});
+    const rng = mulberry32(o.seed), gauss = makeGauss(rng);
+    const clean = new Array(o.n), raw = new Array(o.n), inStorm = new Array(o.n).fill(false);
+    let u = 0, carryCum = 0;
+    for (let t = 0; t < o.n; t++) {
+      const storm = o.stormStart >= 0 && t >= o.stormStart && t <= o.stormEnd;
+      inStorm[t] = storm;
+      const sd = storm ? o.sdStorm : o.sdCalm;
+      u = o.phi * u + gauss() * sd;
+      carryCum -= o.dailyCarry;
+      clean[t] = round2(u);
+      raw[t] = round2(u + carryCum);
+    }
+    return { clean, raw, inStorm, opts: o };
+  }
+
+  function genBandScenario(seed, scen) {
+    const sc = typeof scen === 'string' ? (BAND_SCENARIOS.find((x) => x.id === scen) || BAND_SCENARIOS[0]) : (scen || BAND_SCENARIOS[0]);
+    return genBand(Object.assign({ seed: seed || 7 }, sc.opts));
+  }
+
+  function backtestBands(bd, params) {
+    const p = Object.assign({
+      n: 45, stopZ: 3.6, maxHold: 30,
+      bandMode: 'ou_carry_pro'
+    }, params || {});
+    const baseCost = p.cost !== undefined ? p.cost : bd.opts.cost;
+    const barCost = (idx) => baseCost * (bd.inStorm[idx] ? 2.4 : 1.0);
+    const dailyCarry = bd.opts.dailyCarry || 0;
+    const len = bd.clean.length;
+
+    const sigSer = p.bandMode === 'ou_carry_pro' ? bd.clean : bd.raw;
+    const st = rolling(sigSer, p.n);
+    const va = volAdaptiveBands(sigSer, { baseEntry: 1.75, baseExit: 0.30, gamma: 0.85 });
+
+    const upBand = new Array(len).fill(null), dnBand = new Array(len).fill(null), exBand = new Array(len).fill(null);
+    const carryLabel = new Array(len).fill('neutral');
+    const trades = [], equity = new Array(len).fill(0), pos = new Array(len).fill(0);
+    let cur = 0, entry = null, realized = 0;
+
+    for (let t = 0; t < len; t++) {
+      const z = st.z[t];
+      if (z !== null) {
+        let shortIn = 2.0, longIn = 2.0, outZ = 0.4, allowLong = true, allowShort = true;
+        if (p.bandMode === 'no_hyst') {
+          shortIn = 0.70; longIn = 0.70; outZ = 0.65;
+        } else if (p.bandMode === 'fixed_2s') {
+          shortIn = 2.0; longIn = 2.0; outZ = 0.40;
+        } else if (p.bandMode === 'vol_adapt') {
+          shortIn = va.entryBand[t]; longIn = va.entryBand[t]; outZ = va.exitBand[t];
+        } else {
+          const sub = bd.clean.slice(Math.max(0, t - 60), t + 1);
+          const ou = ouFit(sub);
+          const bb = bertramBands(ou.theta, Math.max(0.5, st.std[t]), baseCost);
+          const ov = carryOverlayBands(bb.entryZ, bb.exitZ, dailyCarry, Math.max(0.5, st.std[t]), bb.holdDays);
+          shortIn = ov.shortEntry; longIn = ov.longEntry; outZ = ov.exitZ;
+          allowLong = !ov.blockLong; allowShort = !ov.blockShort;
+          carryLabel[t] = ov.label;
+        }
+        upBand[t] = shortIn; dnBand[t] = -longIn; exBand[t] = outZ;
+
+        if (cur !== 0) entry.carryAcc += (-cur) * dailyCarry;
+
+        if (cur === 0) {
+          if (z >= shortIn && allowShort) {
+            cur = -1;
+            const hf = 0.5 * barCost(t);
+            entry = { dir: -1, idx: t, valIn: bd.clean[t], zIn: z, carryAcc: 0, openFee: hf };
+            realized -= hf;
+          } else if (z <= -longIn && allowLong) {
+            cur = 1;
+            const hf = 0.5 * barCost(t);
+            entry = { dir: 1, idx: t, valIn: bd.clean[t], zIn: z, carryAcc: 0, openFee: hf };
+            realized -= hf;
+          }
+        } else {
+          const held = t - entry.idx;
+          const hitTarget = (cur === -1 && z <= outZ) || (cur === 1 && z >= -outZ);
+          const hitStop = (cur === -1 && z >= Math.max(p.stopZ, shortIn + 1.3)) || (cur === 1 && z <= -Math.max(p.stopZ, longIn + 1.3));
+          const hitTime = p.maxHold > 0 && held >= p.maxHold;
+          if (hitTarget || hitStop || hitTime) {
+            const reason = hitStop ? 'stop' : hitTarget ? 'target' : 'time';
+            const pricePnl = cur * (bd.clean[t] - entry.valIn);
+            const gross = pricePnl + entry.carryAcc;
+            const cf = 0.5 * barCost(t);
+            const totCost = entry.openFee + cf;
+            trades.push({
+              dir: cur, signalIn: entry.idx, entryIdx: entry.idx, exitIdx: t, signalOut: t, bars: held,
+              entryZ: round2(entry.zIn), exitZ: round2(z),
+              pricePnl: round2(pricePnl), carryPnl: round2(entry.carryAcc),
+              gross: round2(gross), cost: round2(totCost), net: round2(gross - totCost), reason
+            });
+            realized += gross - cf;
+            cur = 0; entry = null;
+          }
+        }
+      }
+      pos[t] = cur;
+      equity[t] = realized + (cur !== 0 ? cur * (bd.clean[t] - entry.valIn) + entry.carryAcc : 0);
+    }
+    if (cur !== 0) {
+      const last = len - 1;
+      const pricePnl = cur * (bd.clean[last] - entry.valIn);
+      const gross = pricePnl + entry.carryAcc;
+      const cf = 0.5 * barCost(last);
+      const totCost = entry.openFee + cf;
+      trades.push({
+        dir: cur, signalIn: entry.idx, entryIdx: entry.idx, exitIdx: last, signalOut: last, bars: last - entry.idx,
+        entryZ: round2(entry.zIn), exitZ: round2(st.z[last] || 0),
+        pricePnl: round2(pricePnl), carryPnl: round2(entry.carryAcc),
+        gross: round2(gross), cost: round2(totCost), net: round2(gross - totCost), reason: 'end'
+      });
+      realized += gross - cf;
+      pos[last] = 0; equity[last] = realized;
+    }
+    const m = metrics(trades, equity, pos);
+    return {
+      params: p, trades, equity, pos, upBand, dnBand, exBand, carryLabel,
+      z: st.z, mean: st.mean, std: st.std, volAdapt: va, metrics: m
+    };
+  }
+
+  function explainBands(bd, n, t, opts) {
+    if (t < n - 1) return null;
+    const o = Object.assign({ bandMode: 'ou_carry_pro' }, opts || {});
+    const baseCost = bd.opts.cost;
+    const dailyCarry = bd.opts.dailyCarry || 0;
+    const sub = bd.clean.slice(Math.max(0, t - 60), t + 1);
+    const ou = ouFit(sub);
+    const exClean = explainBar(bd.clean, n, t);
+    const exRaw = explainBar(bd.raw, n, t);
+    const bb = bertramBands(ou.theta, Math.max(0.5, exClean.std), baseCost);
+    const ov = carryOverlayBands(bb.entryZ, bb.exitZ, dailyCarry, Math.max(0.5, exClean.std), bb.holdDays);
+    const va = volAdaptiveBands(bd.clean.slice(0, t + 1), { baseEntry: 1.75, baseExit: 0.30, gamma: 0.85 });
+    return {
+      t, cleanVal: bd.clean[t], rawVal: bd.raw[t], inStorm: bd.inStorm[t],
+      dailyCarry, baseCost, effCost: baseCost * (bd.inStorm[t] ? 2.4 : 1.0),
+      ou, bertram: bb, overlay: ov,
+      volMult: va.mult[t], volEntry: va.entryBand[t], volExit: va.exitBand[t],
+      zClean: exClean.z, zRaw: exRaw.z, stdClean: exClean.std, meanClean: exClean.mean
+    };
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
