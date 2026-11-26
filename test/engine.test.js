@@ -636,4 +636,77 @@ for (const sc of E.MOEX_SCENARIOS) {
   console.log('MOEX, «' + sc.name + '»: ласт ' + nl.toFixed(0) + ', сырой SP ' + rs.toFixed(0) + ', чистый+легг ' + cl.toFixed(0) + ' (MC ' + mc + '), MOEX Pro ' + mp.toFixed(0));
 }
 
+// 38. Фильтр Калмана, TLS, Theil–Sen, KPSS, Хёрст, CUSUM и ERT (#56, #47).
+{
+  const dg = E.genDiagScenario(7, E.DIAG_SCENARIOS[1]);
+  const ortXY = E.tls(dg.b, dg.a), ortYX = E.tls(dg.a, dg.b);
+  close(ortXY.k * ortYX.k, 1.0, 1e-9);
+
+  const cleanX = [10, 20, 30, 40, 50, 60, 70, 80];
+  const cleanY = cleanX.map((v) => 5 + 1.5 * v);
+  const dirtyY = cleanY.slice();
+  dirtyY[3] += 250;
+  close(E.theilSen(cleanX, dirtyY).k, 1.5, 1e-9);
+  assert.ok(Math.abs(E.ols(cleanX, dirtyY).k - 1.5) > 0.4);
+
+  const kfFull = E.kalmanHedge(dg.b, dg.a, { huberK: 2.1 });
+  const kfCut = E.kalmanHedge(dg.b.slice(0, 150), dg.a.slice(0, 150), { huberK: 2.1 });
+  for (let i = 0; i < 150; i++) {
+    close(kfFull.priorBeta[i], kfCut.priorBeta[i], 1e-12);
+    close(kfFull.innov[i], kfCut.innov[i], 1e-12);
+  }
+
+  const dgClean = E.genDiag({ seed: 11, n: 220, beta0: 1.2, beta1: 1.2, ouRho: 0.55, ouSd: 1.5, xNoise: 0.05 });
+  const cleanRes = dgClean.a.map((v, i) => v - 12 - 1.2 * dgClean.b[i]);
+  const rwSeries = [];
+  let acc = 0;
+  for (let i = 0; i < 220; i++) { acc += cleanRes[i] * 0.6; rwSeries.push(acc); }
+  const smOu = E.stationarityMatrix(cleanRes);
+  const smRw = E.stationarityMatrix(rwSeries);
+  assert.strictEqual(smOu.verdict, 'confirmed');
+  assert.ok(smOu.hurst < 0.45);
+  assert.strictEqual(smRw.verdict, 'random_walk');
+  assert.ok(smRw.hurst > 0.48);
+
+  const hlDist = E.halfLifeDist(cleanRes, 50, 10);
+  assert.ok(hlDist.values.length >= 15 && hlDist.p25 <= hlDist.median && hlDist.median <= hlDist.p75);
+
+  const ertFast = E.calcERT(cleanRes, { sigmaMin: 0.8 });
+  const ertTiny = E.calcERT(cleanRes.map((v) => v * 0.02), { sigmaMin: 0.8 });
+  assert.ok(ertFast.valid && ertFast.ert < 8);
+  assert.ok(!ertTiny.valid);
+}
+
+// 39. Каузальность backtestDiag и сводка 4 сценария × 11 историй (#56, #47).
+{
+  const dg = E.genDiagScenario(7, E.DIAG_SCENARIOS[2]);
+  ['ols_plain', 'robust_tls', 'kalman_only', 'kalman_health'].forEach((md) => {
+    const full = E.backtestDiag(dg, { diagMode: md });
+    const cutDg = {
+      a: dg.a.slice(0, 190), b: dg.b.slice(0, 190),
+      aExec: dg.aExec.slice(0, 190), bExec: dg.bExec.slice(0, 190),
+      trueBeta: dg.trueBeta.slice(0, 190), trueAlpha: dg.trueAlpha.slice(0, 190),
+      isGlitch: dg.isGlitch.slice(0, 190), opts: dg.opts
+    };
+    const part = E.backtestDiag(cutDg, { diagMode: md });
+    for (let i = 0; i < 189; i++) {
+      assert.strictEqual(full.pos[i], part.pos[i]);
+      close(full.z[i] || 0, part.z[i] || 0, 1e-9);
+    }
+  });
+
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  E.DIAG_SCENARIOS.forEach((sc) => {
+    let tOls = 0, tRob = 0, tKal = 0, tPro = 0;
+    seeds.forEach((sd) => {
+      const d = E.genDiagScenario(sd, sc);
+      tOls += E.backtestDiag(d, { diagMode: 'ols_plain' }).metrics.total;
+      tRob += E.backtestDiag(d, { diagMode: 'robust_tls' }).metrics.total;
+      tKal += E.backtestDiag(d, { diagMode: 'kalman_only' }).metrics.total;
+      tPro += E.backtestDiag(d, { diagMode: 'kalman_health' }).metrics.total;
+    });
+    console.log('диагностика, «' + sc.name + '»: OLS ' + tOls.toFixed(0) + ', TLS/TS ' + tRob.toFixed(0) + ', Калман ' + tKal.toFixed(0) + ', Калман+Здоровье ' + tPro.toFixed(0));
+  });
+}
+
 console.log('OK: все проверки пройдены');
