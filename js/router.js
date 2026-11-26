@@ -7,7 +7,7 @@
   let stratId = 'zscore', stepIdx = 0;
   const visited = {};
   const strategies = () => window.STRATEGIES;
-  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS })[id] || [];
+  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS, robust: window.RBSCREENS })[id] || [];
 
   function parseHash() {
     const m = location.hash.match(/^#([a-z0-9_-]+)(?:\/(\d+))?/);
