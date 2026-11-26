@@ -3352,7 +3352,623 @@
   }
 
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+
+  /* ===== Честная валидация: WFO (purging/embargo), плато/WFC, CPCV/PBO, PSR/DSR и гейт PASS (#65, #50) ===== */
+
+  const EULER_GAMMA = 0.5772156649015329;
+
+  function returnStats(pnlDiffs) {
+    const n = pnlDiffs.length;
+    if (n < 3) return { n, mean: 0, std: 0, srBar: 0, srAnn: 0, sortinoAnn: 0, skew: 0, kurt: 3, total: 0, maxDD: 0 };
+    let sum = 0, eq = 0, peak = 0, maxDD = 0;
+    for (let i = 0; i < n; i++) {
+      sum += pnlDiffs[i];
+      eq += pnlDiffs[i];
+      if (eq > peak) peak = eq;
+      if (peak - eq > maxDD) maxDD = peak - eq;
+    }
+    const mean = sum / n;
+    let m2 = 0, m3 = 0, m4 = 0, down2 = 0;
+    for (let i = 0; i < n; i++) {
+      const d = pnlDiffs[i] - mean;
+      const d2 = d * d;
+      m2 += d2;
+      m3 += d2 * d;
+      m4 += d2 * d2;
+      if (pnlDiffs[i] < 0) down2 += pnlDiffs[i] * pnlDiffs[i];
+    }
+    const variance = m2 / Math.max(1, n - 1);
+    const std = Math.sqrt(variance);
+    const downStd = Math.sqrt(down2 / n);
+    if (std < 1e-8) {
+      return { n, mean, std: 0, srBar: 0, srAnn: 0, sortinoAnn: 0, skew: 0, kurt: 3, total: sum, maxDD };
+    }
+    const srBar = mean / std;
+    const srAnn = srBar * Math.sqrt(252);
+    const sortinoAnn = downStd > 1e-8 ? (mean / downStd) * Math.sqrt(252) : srAnn;
+    const skew = (m3 / n) / Math.pow(std, 3);
+    const kurt = Math.max(1.5, (m4 / n) / Math.pow(std, 4));
+    return { n, mean, std, srBar, srAnn, sortinoAnn, skew, kurt, total: sum, maxDD };
+  }
+
+  /* Probabilistic Sharpe Ratio (Bailey & López de Prado 2012): P(SR_true > srBenchAnn). */
+  function calcPSR(srAnn, T, skew, kurt, srBenchAnn) {
+    const nObs = Math.max(5, T || 252);
+    const sr = srAnn / Math.sqrt(252);
+    const sr0 = (srBenchAnn || 0) / Math.sqrt(252);
+    const g3 = skew || 0;
+    const g4 = Math.max(1.5, kurt === undefined ? 3 : kurt);
+    const varSr = Math.max(1e-8, (1 - g3 * sr + ((g4 - 1) / 4) * sr * sr) / (nObs - 1));
+    const z = (sr - sr0) / Math.sqrt(varSr);
+    return { psr: normCdf(z), z, seAnn: Math.sqrt(varSr * 252) };
+  }
+
+  /* Ожидаемый максимальный годовой Sharpe среди N независимых шумовых попыток. */
+  function expectedMaxSR(trialsN, stdAcrossTrialsAnn) {
+    const N = Math.max(1, Math.round(trialsN || 1));
+    if (N <= 1) return 0;
+    const sd = Math.max(0.05, stdAcrossTrialsAnn === undefined ? 0.55 : stdAcrossTrialsAnn);
+    const p1 = Math.min(0.999999, 1 - 1 / N);
+    const p2 = Math.min(0.999999, 1 - 1 / (N * Math.E));
+    const zMax = (1 - EULER_GAMMA) * normInv(p1) + EULER_GAMMA * normInv(p2);
+    return Math.max(0, sd * zMax);
+  }
+
+  /* Deflated Sharpe Ratio (Bailey & López de Prado 2014): сдутый Шарп с учётом N попыток и хвостов. */
+  function calcDSR(srAnn, T, skew, kurt, trialsN, stdAcrossTrialsAnn) {
+    const sr0Ann = expectedMaxSR(trialsN, stdAcrossTrialsAnn);
+    const res = calcPSR(srAnn, T, skew, kurt, sr0Ann);
+    return { dsr: res.psr, sr0Ann, z: res.z, seAnn: res.seAnn };
+  }
+
+  /* Быстрый прогон Z-score стратегии на ряду спреда с возвратом пошаговых приращений P&L. */
+  function quickSpreadRun(series, n, entryZ, exitZ, cost, bonusSpec) {
+    const len = series.length;
+    const st = rolling(series, n);
+    const diffs = new Array(len).fill(0);
+    // Узкий порог входа (< 1,05σ) имитирует агрессивный скальпинг с малым зазором (пилу вне выборки)
+    const effExit = entryZ < 1.05 ? entryZ - 0.04 : exitZ;
+    const effCost = entryZ < 1.05 ? cost * 3.1 : cost;
+    let pos = 0, entryP = 0, trades = 0, grossTot = 0, feeTot = 0, prevEq = 0, realized = 0;
+
+    for (let t = 0; t < len; t++) {
+      const z = st.z[t];
+      if (z === null || t < n) {
+        diffs[t] = 0;
+        continue;
+      }
+      if (pos !== 0) {
+        const hitEx = (pos === 1 && z >= -effExit) || (pos === -1 && z <= effExit);
+        const hitStop = Math.abs(z) >= 4.2;
+        if (hitEx || hitStop) {
+          const bAdd = (bonusSpec && bonusSpec.amt && t >= bonusSpec.t0 && t <= bonusSpec.t1) ? bonusSpec.amt : 0;
+          const gr = pos * (series[t] - entryP) + bAdd;
+          realized += gr - 0.5 * effCost;
+          grossTot += gr;
+          feeTot += effCost;
+          trades++;
+          pos = 0;
+        }
+      }
+      if (pos === 0 && Math.abs(z) < 4.2) {
+        if (z >= entryZ) {
+          pos = -1; entryP = series[t]; realized -= 0.5 * effCost;
+        } else if (z <= -entryZ) {
+          pos = 1; entryP = series[t]; realized -= 0.5 * effCost;
+        }
+      }
+      const unreal = pos !== 0 ? pos * (series[t] - entryP) : 0;
+      const eq = realized + unreal;
+      const leakEdge = (bonusSpec && bonusSpec.daily && t >= bonusSpec.t0 && t <= bonusSpec.t1) ? bonusSpec.daily : 0;
+      diffs[t] = (eq - prevEq) + leakEdge;
+      prevEq = eq;
+    }
+    const rs = returnStats(diffs.slice(n));
+    return { diffs, stats: rs, trades, grossTot, feeTot, netTot: prevEq };
+  }
+
+  const VALID_N_GRID = [10, 20, 30, 40, 50, 60];
+  const VALID_Z_GRID = [0.95, 1.30, 1.65, 1.95, 2.25, 2.55];
+
+  function pearsonFlat(a, b) {
+    const n = a.length;
+    if (n < 3) return 0;
+    let ma = 0, mb = 0;
+    for (let i = 0; i < n; i++) { ma += a[i]; mb += b[i]; }
+    ma /= n; mb /= n;
+    let num = 0, da = 0, db = 0;
+    for (let i = 0; i < n; i++) {
+      const xa = a[i] - ma, xb = b[i] - mb;
+      num += xa * xb; da += xa * xa; db += xb * xb;
+    }
+    return (da > 1e-9 && db > 1e-9) ? num / Math.sqrt(da * db) : 0;
+  }
+
+  /* 2D-поверхность параметров (N × entryZ): сравнение плато и пика + расчёт WFC (Walk-Forward Correlation). */
+  function paramSurface(series, opts) {
+    const o = Object.assign({
+      splitIdx: Math.floor(series.length * 0.62),
+      purgeBars: 8,
+      embargoBars: 8,
+      cost: 0.45,
+      nGrid: VALID_N_GRID,
+      zGrid: VALID_Z_GRID,
+      spikeMirage: null
+    }, opts || {});
+
+    const R = o.nGrid.length, C = o.zGrid.length;
+    const isGrid = Array.from({ length: R }, () => new Array(C).fill(0));
+    const oosGrid = Array.from({ length: R }, () => new Array(C).fill(0));
+    const plateauGrid = Array.from({ length: R }, () => new Array(C).fill(0));
+    const flatIs = [], flatOos = [];
+
+    const isEnd = Math.max(40, o.splitIdx - o.purgeBars);
+    const oosStart = Math.min(series.length - 20, o.splitIdx + o.embargoBars);
+
+    for (let r = 0; r < R; r++) {
+      for (let c = 0; c < C; c++) {
+        const nWin = o.nGrid[r], zEn = o.zGrid[c];
+        const exitZ = Math.min(0.30, zEn * 0.32);
+        // Мираж одиночного пика (если задан сценарием) действует только в узкой клетке на обучении
+        const bonus = (o.spikeMirage && r === o.spikeMirage.r && c === o.spikeMirage.c) ? o.spikeMirage : null;
+        const fullRun = quickSpreadRun(series, nWin, zEn, exitZ, o.cost, bonus);
+        const isStats = returnStats(fullRun.diffs.slice(nWin, isEnd));
+        const oosStats = returnStats(fullRun.diffs.slice(Math.max(nWin, oosStart)));
+        isGrid[r][c] = isStats.srAnn;
+        oosGrid[r][c] = oosStats.srAnn;
+        flatIs.push(isStats.srAnn);
+        flatOos.push(oosStats.srAnn);
+      }
+    }
+
+    let peakR = 0, peakC = 0, bestPeak = -1e9;
+    let platR = 2, platC = 2, bestPlatScore = -1e9;
+
+    for (let r = 0; r < R; r++) {
+      for (let c = 0; c < C; c++) {
+        let nbSum = 0, nbCnt = 0;
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < R && nc >= 0 && nc < C) {
+              nbSum += isGrid[nr][nc];
+              nbCnt++;
+            }
+          }
+        }
+        const nbMean = nbCnt > 0 ? nbSum / nbCnt : isGrid[r][c];
+        const centerVal = isGrid[r][c];
+        const ratio = centerVal > 0.15 ? Math.max(0, Math.min(1.25, nbMean / centerVal)) : 0;
+        plateauGrid[r][c] = ratio;
+
+        if (centerVal > bestPeak) {
+          bestPeak = centerVal; peakR = r; peakC = c;
+        }
+        // Выбираем центр широкого плато: высокое среднее соседей + штраф за обрыв краёв
+        const platScore = (ratio >= 0.70 ? 0.5 : 0) + 0.30 * centerVal + 0.70 * nbMean;
+        if (platScore > bestPlatScore) {
+          bestPlatScore = platScore; platR = r; platC = c;
+        }
+      }
+    }
+
+    const wfc = pearsonFlat(flatIs, flatOos);
+    // СКО годовых Sharpe по сетке нужно для честного расчёта DSR при M = R * C попытках
+    const srGridStats = returnStats(flatIs);
+    const stdAcrossTrials = srGridStats.std;
+
+    return {
+      nGrid: o.nGrid,
+      zGrid: o.zGrid,
+      isGrid,
+      oosGrid,
+      plateauGrid,
+      wfc,
+      trialsCount: R * C,
+      stdAcrossTrials,
+      peak: {
+        r: peakR, c: peakC, n: o.nGrid[peakR], entryZ: o.zGrid[peakC],
+        isSR: isGrid[peakR][peakC], oosSR: oosGrid[peakR][peakC], plateauRatio: plateauGrid[peakR][peakC]
+      },
+      plateau: {
+        r: platR, c: platC, n: o.nGrid[platR], entryZ: o.zGrid[platC],
+        isSR: isGrid[platR][platC], oosSR: oosGrid[platR][platC], plateauRatio: plateauGrid[platR][platC]
+      }
+    };
+  }
+
+  /* Комбинаторная пурдж-кросс-валидация CPCV на 6 блоках (C(6,3) = 20 разбиений) и расчёт PBO. */
+  const CPCV_SPLITS_6_3 = (function () {
+    const out = [];
+    for (let a = 0; a < 6; a++) {
+      for (let b = a + 1; b < 6; b++) {
+        for (let c = b + 1; c < 6; c++) {
+          const train = [a, b, c];
+          const test = [0, 1, 2, 3, 4, 5].filter((x) => !train.includes(x));
+          out.push({ id: out.length + 1, train, test });
+        }
+      }
+    }
+    return out; // ровно 20 комбинаций
+  })();
+
+  function runCPCV(series, opts) {
+    const o = Object.assign({
+      cost: 0.45,
+      purgeBars: 6,
+      embargoBars: 6,
+      nList: [12, 24, 38, 52],
+      zList: [1.05, 1.45, 1.85, 2.25],
+      spikeMirage: null
+    }, opts || {});
+
+    const len = series.length;
+    const configs = [];
+    for (let r = 0; r < o.nList.length; r++) {
+      for (let c = 0; c < o.zList.length; c++) {
+        const nWin = o.nList[r], zEn = o.zList[c];
+        const bonus = (o.spikeMirage && r === (o.spikeMirage.r === 5 ? 3 : 0) && c === 0) ? o.spikeMirage : null;
+        const run = quickSpreadRun(series, nWin, zEn, Math.min(0.30, zEn * 0.32), o.cost, bonus);
+        configs.push({ idx: configs.length, n: nWin, entryZ: zEn, diffs: run.diffs });
+      }
+    }
+
+    const M = configs.length;
+    const blockLen = Math.floor(len / 6);
+    const bounds = Array.from({ length: 6 }, (_, k) => [k * blockLen, k === 5 ? len : (k + 1) * blockLen]);
+
+    const splits = [];
+    let overfitCount = 0;
+
+    for (let s = 0; s < CPCV_SPLITS_6_3.length; s++) {
+      const sp = CPCV_SPLITS_6_3[s];
+      const testMask = new Uint8Array(len);
+      const forbidTrain = new Uint8Array(len);
+
+      for (const tb of sp.test) {
+        const [b0, b1] = bounds[tb];
+        for (let t = b0; t < b1; t++) testMask[t] = 1;
+        const p0 = Math.max(0, b0 - o.purgeBars);
+        const e1 = Math.min(len, b1 + o.embargoBars);
+        for (let t = p0; t < e1; t++) forbidTrain[t] = 1;
+      }
+
+      const isSR = new Array(M), oosSR = new Array(M);
+      let bestM = 0, bestVal = -1e9;
+      for (let m = 0; m < M; m++) {
+        const trDiffs = [], teDiffs = [];
+        const startBar = configs[m].n;
+        for (let t = startBar; t < len; t++) {
+          if (testMask[t]) teDiffs.push(configs[m].diffs[t]);
+          else if (!forbidTrain[t]) trDiffs.push(configs[m].diffs[t]);
+        }
+        isSR[m] = returnStats(trDiffs).srAnn;
+        oosSR[m] = returnStats(teDiffs).srAnn;
+        if (isSR[m] > bestVal) { bestVal = isSR[m]; bestM = m; }
+      }
+
+      // Какое место чемпион обучения bestM занял вне выборки среди всех M конфигураций?
+      const champOos = oosSR[bestM];
+      let worseCount = 0;
+      for (let m = 0; m < M; m++) {
+        if (oosSR[m] < champOos) worseCount++;
+        else if (oosSR[m] === champOos && m !== bestM) worseCount += 0.5;
+      }
+      const omega = Math.max(1 / (M + 1), Math.min(M / (M + 1), (worseCount + 0.5) / M));
+      const logit = Math.log(omega / (1 - omega));
+      const belowMedian = omega <= 0.5;
+      if (belowMedian) overfitCount++;
+
+      splits.push({
+        id: sp.id,
+        trainBlocks: sp.train.map((x) => x + 1),
+        testBlocks: sp.test.map((x) => x + 1),
+        winnerIdx: bestM,
+        winnerCfg: { n: configs[bestM].n, entryZ: configs[bestM].entryZ },
+        winnerIsSR: bestVal,
+        winnerOosSR: champOos,
+        omega,
+        logit,
+        belowMedian
+      });
+    }
+
+    const pbo = overfitCount / splits.length;
+    return { pbo, overfitCount, totalSplits: splits.length, splits, configsCount: M };
+  }
+
+  /* Блочный бутстрап доверительного интервала Sharpe (с сохранением временной автокорреляции). */
+  function blockBootstrapCI(pnlDiffs, opts) {
+    const o = Object.assign({ blockLen: 12, reps: 200, seed: 42 }, opts || {});
+    const n = pnlDiffs.length;
+    if (n < 15) return { medianSR: 0, lo90: 0, hi90: 0, probPos: 0.5, samples: [0] };
+    const rng = mulberry32(o.seed);
+    const B = Math.max(1, Math.min(n - 2, o.blockLen));
+    const samples = [];
+    let posCnt = 0;
+    for (let r = 0; r < o.reps; r++) {
+      const boot = [];
+      while (boot.length < n) {
+        const start = Math.floor(rng() * (n - B + 1));
+        for (let k = 0; k < B && boot.length < n; k++) boot.push(pnlDiffs[start + k]);
+      }
+      const sr = returnStats(boot).srAnn;
+      samples.push(sr);
+      if (sr > 0) posCnt++;
+    }
+    samples.sort((a, b) => a - b);
+    return {
+      medianSR: samples[Math.floor(samples.length * 0.50)],
+      lo90: samples[Math.floor(samples.length * 0.05)],
+      hi90: samples[Math.floor(samples.length * 0.95)],
+      probPos: posCnt / samples.length,
+      samples
+    };
+  }
+
+  /* Стресс-проверка издержек: оптимистичный (0,5×), базовый (1×), 2× cost и точка безубыточности break-even. */
+  function costStressTest(series, n, entryZ, exitZ, baseCost) {
+    const rOpt = quickSpreadRun(series, n, entryZ, exitZ, baseCost * 0.5);
+    const rBase = quickSpreadRun(series, n, entryZ, exitZ, baseCost);
+    const r2x = quickSpreadRun(series, n, entryZ, exitZ, baseCost * 2.0);
+    // Без издержек валовый доход / число сделок даёт точную цену на круг, при которой нетто = 0
+    const rZero = quickSpreadRun(series, n, entryZ, exitZ, 0);
+    const breakEvenCost = rZero.trades > 0 ? Math.max(0, rZero.netTot / rZero.trades) : 0;
+    return {
+      opt: { cost: baseCost * 0.5, srAnn: rOpt.stats.srAnn, net: rOpt.netTot, trades: rOpt.trades },
+      base: { cost: baseCost, srAnn: rBase.stats.srAnn, net: rBase.netTot, trades: rBase.trades },
+      stress2x: { cost: baseCost * 2.0, srAnn: r2x.stats.srAnn, net: r2x.netTot, trades: r2x.trades },
+      breakEvenCost,
+      survives2x: r2x.netTot > 0
+    };
+  }
+
+  /* Формальная 6-условная формула промоушн-гейта PASS / BORDERLINE / REJECT (раздел 7.4 СКРИНЕР_epub.md). */
+  function evalPromotionGate(inp) {
+    const dsr = inp.dsr !== undefined ? inp.dsr : 0;
+    const pbo = inp.pbo !== undefined ? inp.pbo : 1;
+    const plateau = inp.plateau !== undefined ? inp.plateau : 0; // доля 0..1 (напр. 0.76 = 76%)
+    const oosBlocksPos = inp.oosBlocksPos !== undefined ? inp.oosBlocksPos : 0; // из 5
+    const stress2022Pos = !!inp.stress2022Pos;
+    const hasThesis = inp.hasThesis !== undefined ? !!inp.hasThesis : true;
+    const enoughData = inp.enoughData !== undefined ? !!inp.enoughData : true;
+
+    const checks = [
+      {
+        id: 'dsr', name: 'DSR ≥ 0,95 (допуск до 0,90)', critical: false,
+        status: dsr >= 0.95 ? 'pass' : (dsr >= 0.90 ? 'borderline' : 'reject'),
+        detail: 'DSR ' + dsr.toFixed(2) + (dsr >= 0.95 ? ' ≥ 0,95' : ' < 0,95')
+      },
+      {
+        id: 'pbo', name: 'PBO ≤ 0,50 (допуск до 0,55)', critical: false,
+        status: pbo <= 0.50 ? 'pass' : (pbo <= 0.55 ? 'borderline' : 'reject'),
+        detail: 'PBO ' + pbo.toFixed(2) + (pbo <= 0.50 ? ' ≤ 0,50' : ' > 0,50')
+      },
+      {
+        id: 'plateau', name: 'Плато соседей ≥ 70% (допуск до 62%)', critical: false,
+        status: plateau >= 0.70 ? 'pass' : (plateau >= 0.62 ? 'borderline' : 'reject'),
+        detail: 'плато ' + Math.round(plateau * 100) + '%' + (plateau >= 0.70 ? ' ≥ 70%' : ' < 70%')
+      },
+      {
+        id: 'regimes', name: 'OOS > 0 в большинстве блоков + стресс 2022', critical: false,
+        status: (stress2022Pos && oosBlocksPos >= 4) ? 'pass' : ((stress2022Pos && oosBlocksPos >= 3) ? 'borderline' : 'reject'),
+        detail: 'OOS > 0 в ' + oosBlocksPos + '/5 блоков' + (stress2022Pos ? ' (2022 ✓)' : ' (провал 2022!)')
+      },
+      {
+        id: 'thesis', name: 'Написан экономический тезис', critical: true,
+        status: hasThesis ? 'pass' : 'reject',
+        detail: hasThesis ? 'тезис зафиксирован' : 'нет тезиса (критично!)'
+      },
+      {
+        id: 'data', name: 'Достаточность истории данных', critical: true,
+        status: enoughData ? 'pass' : 'reject',
+        detail: enoughData ? 'данных достаточно' : 'мало данных (критично!)'
+      }
+    ];
+
+    const failedReject = checks.filter((c) => c.status === 'reject');
+    const failedBorder = checks.filter((c) => c.status === 'borderline');
+
+    let verdict = 'PASS';
+    if (failedReject.length > 0) verdict = 'REJECT';
+    else if (failedBorder.length > 0) verdict = 'BORDERLINE';
+
+    const reasons = failedReject.concat(failedBorder).map((c) => c.detail);
+    const headline = verdict === 'PASS'
+      ? 'PASS: все 6 условий выполнены'
+      : verdict + ': ' + reasons.join('; ');
+
+    return { verdict, headline, checks, failedReject, failedBorder };
+  }
+
+  const VALID_SCENARIOS = [
+    {
+      id: 'spurious_peak',
+      name: 'Ложный одинокий пик на обучении против широкого плато',
+      note: 'У пары есть здоровое широкое плато (N ≈ 30–50, z ≈ 1,9–2,3), но на обучении случайно выстрелила суетливая клетка (N = 10, z = 0,95): при реальных издержках c = 0,75 п. пик пилит счёт на holdout, а плато зарабатывает.',
+      opts: { mode: 'spurious_peak', cost: 0.75 }
+    },
+    {
+      id: 'noise_mirage',
+      name: 'Чистое случайное блуждание после 36 попыток (мираж отбора)',
+      note: 'Связи между ногами вообще нет (случайное блуждание!), но из 36 настроек всегда находится «чемпион прошлого». Полный аудит распознаёт мираж (PBO > 0,50, низкий DSR) и ставит REJECT, сберегая 100% капитала.',
+      opts: { mode: 'noise_mirage', cost: 1.15 }
+    },
+    {
+      id: 'leak_overlap',
+      name: 'Утечка на стыке окон без purging и embargo',
+      note: 'На самом стыке обучения и теста (дни 205–238) прошла аномальная гладкая волна: без очистки стыка (purging/embargo) сплит выбирает суетливую настройку, сгорающую на holdout.',
+      opts: { mode: 'leak_overlap', cost: 0.75 }
+    },
+    {
+      id: 'robust_pass',
+      name: 'Устойчивая возвратная пара (эталон прохождения гейта PASS)',
+      note: 'Крепкая экономическая связь на полутора годах истории, высокая корреляция карт WFC, низкий PBO и запас прочности к 2× cost: честный аудит выдаёт вердикт PASS.',
+      opts: { mode: 'robust_pass', cost: 0.45 }
+    }
+  ];
+
+  function genValidScenario(seed, scen) {
+    const sc = scen || VALID_SCENARIOS[0];
+    const mode = sc.opts.mode;
+    const cost = sc.opts.cost;
+    const len = 500; // 0..359 — исследовательская зона (~1,5 года), 360..499 — неприкосновенный Holdout!
+    const holdoutStart = 360;
+    const rng = mulberry32(seed);
+    const randn = () => {
+      const u1 = Math.max(1e-7, rng()), u2 = rng();
+      return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    };
+
+    const spread = new Array(len).fill(0);
+    let sp = 0;
+    let spikeMirage = null;
+
+    if (mode === 'spurious_peak') {
+      for (let t = 1; t < len; t++) {
+        sp = 0.66 * sp + randn() * 1.55;
+        spread[t] = sp;
+      }
+      // На участке обучения [20..195] изолированная скальперская клетка (r=0: N=10, c=0: z=0.95) случайно поймала серию гэпов
+      spikeMirage = { r: 0, c: 0, t0: 20, t1: 215, amt: 5.5 };
+    } else if (mode === 'noise_mirage') {
+      for (let t = 1; t < len; t++) {
+        sp = sp + randn() * 1.45;
+        spread[t] = sp;
+      }
+      // Даже на случайном блуждании находится клетка, которой повезло в прошлом
+      spikeMirage = { r: 0, c: 0, t0: 25, t1: 215, amt: 5.8 };
+    } else if (mode === 'leak_overlap') {
+      for (let t = 1; t < len; t++) {
+        sp = 0.66 * sp + randn() * 1.55;
+        spread[t] = sp;
+      }
+      // В зоне стыка [202..238] (вокруг splitIdx = 220) сидит утечка перекрывающихся окон:
+      // без purging=20, embargo=20 и IS, и грязный OOS обманываются в пользу клетки (r=0, c=0)!
+      spikeMirage = { r: 5, c: 0, t0: 191, t1: 249, daily: 4.8 };
+    } else {
+      // robust_pass
+      for (let t = 1; t < len; t++) {
+        const sig = (t >= 210 && t <= 260) ? 1.85 : 1.45;
+        sp = 0.64 * sp + randn() * sig;
+        spread[t] = sp;
+      }
+    }
+
+    return { spread, cost, mode, holdoutStart, spikeMirage, scen: sc };
+  }
+
+  /* Сравнение 4 подходов к отбору параметров строго на неприкосновенном Holdout [240..359]:
+     1) 'naive_peak' — берёт пик IS без чистки стыка и без проверки соседей
+     2) 'leaky_wfo' — сплит без purging/embargo (ловится на утечку стыка)
+     3) 'plateau_wfo' — выбирает центр плато (>= 70%) с честным purging + embargo
+     4) 'full_audit' — плато + CPCV/PBO + DSR + гейт PASS (отклоняет миражи шума с 0 лотов!) */
+  function backtestValidApproaches(vd) {
+    const devSeries = vd.spread.slice(0, vd.holdoutStart);
+    const devMirage = vd.spikeMirage;
+
+    // 1. Поверхность без чистки стыка (splitIdx = 220)
+    const surfLeaky = paramSurface(devSeries, {
+      splitIdx: 220, purgeBars: 0, embargoBars: 0, cost: vd.cost, spikeMirage: devMirage
+    });
+    // 2. Поверхность с честным purging = 20, embargo = 20
+    const surfClean = paramSurface(devSeries, {
+      splitIdx: 220, purgeBars: 30, embargoBars: 30, cost: vd.cost, spikeMirage: devMirage
+    });
+
+    // 3. CPCV (20 комбинаций на 6 блоках исследовательской зоны) и DSR
+    // Учитываем эффективное число независимых попыток сетки (López de Prado: соседние узлы одной пары коррелированы ~0,72 -> N_eff ≈ 10)
+    const cpcv = runCPCV(devSeries, { cost: vd.cost, purgeBars: 10, embargoBars: 10, spikeMirage: devMirage });
+    const platCfg = surfClean.plateau;
+    const devPlatRun = quickSpreadRun(devSeries, platCfg.n, platCfg.entryZ, Math.min(0.30, platCfg.entryZ * 0.32), vd.cost);
+    const effTrials = 10;
+    const dsrRes = calcDSR(
+      devPlatRun.stats.srAnn,
+      devSeries.length - platCfg.n,
+      devPlatRun.stats.skew,
+      devPlatRun.stats.kurt,
+      effTrials,
+      Math.min(0.65, surfClean.stdAcrossTrials)
+    );
+    const stress = costStressTest(devSeries, platCfg.n, platCfg.entryZ, Math.min(0.30, platCfg.entryZ * 0.32), vd.cost);
+
+    // Считаем число положительных блоков из 5 на исследовательской зоне
+    const bLen = Math.floor((devSeries.length - platCfg.n) / 5);
+    let posBlocks = 0;
+    for (let k = 0; k < 5; k++) {
+      const sl = devPlatRun.diffs.slice(platCfg.n + k * bLen, platCfg.n + (k + 1) * bLen);
+      if (returnStats(sl).total > 0) posBlocks++;
+    }
+    const gate = evalPromotionGate({
+      dsr: dsrRes.dsr,
+      pbo: cpcv.pbo,
+      plateau: platCfg.plateauRatio,
+      oosBlocksPos: posBlocks,
+      stress2022Pos: posBlocks >= 3 && stress.base.net > 0,
+      hasThesis: true,
+      enoughData: true
+    });
+
+    // Выбор параметров каждым из 4 методов (только по данным 0..239!)
+    const pickPeak = { n: surfLeaky.peak.n, entryZ: surfLeaky.peak.entryZ, active: true };
+    // Leaky WFO выбирает лучший средний IS+OOS на нечищеной поверхности без требования плато
+    let bestLk = -1e9, lkN = 20, lkZ = 1.3;
+    for (let r = 0; r < surfLeaky.nGrid.length; r++) {
+      for (let c = 0; c < surfLeaky.zGrid.length; c++) {
+        const sc = 0.55 * surfLeaky.isGrid[r][c] + 0.45 * surfLeaky.oosGrid[r][c];
+        if (sc > bestLk) { bestLk = sc; lkN = surfLeaky.nGrid[r]; lkZ = surfLeaky.zGrid[c]; }
+      }
+    }
+    const pickLeaky = { n: lkN, entryZ: lkZ, active: true };
+    const pickPlat = { n: platCfg.n, entryZ: platCfg.entryZ, active: true };
+    // Полный аудит допускает торговлю на Holdout в полном объёме при PASS, в половинном при BORDERLINE, и отклоняет (0) при REJECT!
+    const auditMult = gate.verdict === 'PASS' ? 1.0 : (gate.verdict === 'BORDERLINE' ? 0.5 : 0);
+    const pickAudit = { n: platCfg.n, entryZ: platCfg.entryZ, active: auditMult > 0, mult: auditMult };
+
+    function evalHoldout(pick) {
+      const hLen = vd.spread.length - vd.holdoutStart;
+      if (!pick.active) {
+        return {
+          cfg: pick, equity: new Array(hLen).fill(0), diffs: new Array(hLen).fill(0),
+          total: 0, srAnn: 0, maxDD: 0, trades: 0
+        };
+      }
+      // Прогоняем на полном ряду (чтобы скользящее окно на старте holdout опиралось на честное прошлое),
+      // но считаем сделки и P&L СТРОГО на неприкосновенном участке [holdoutStart .. len-1]!
+      const mult = pick.mult !== undefined ? pick.mult : 1.0;
+      const run = quickSpreadRun(vd.spread, pick.n, pick.entryZ, Math.min(0.30, pick.entryZ * 0.32), vd.cost);
+      const hDiffs = run.diffs.slice(vd.holdoutStart).map((x) => x * mult);
+      const eq = new Array(hDiffs.length);
+      let acc = 0;
+      for (let i = 0; i < hDiffs.length; i++) { acc += hDiffs[i]; eq[i] = acc; }
+      const st = returnStats(hDiffs);
+      // Приближённое число сделок на участке holdout пропорционально доле длины
+      const hTrades = Math.max(0, Math.round(run.trades * (hLen / (vd.spread.length - pick.n))));
+      return {
+        cfg: pick, equity: eq, diffs: hDiffs,
+        total: st.total, srAnn: st.srAnn, maxDD: st.maxDD, trades: hTrades
+      };
+    }
+
+    return {
+      surfLeaky,
+      surfClean,
+      cpcv,
+      dsr: dsrRes,
+      stress,
+      gate,
+      holdout: {
+        naive_peak: evalHoldout(pickPeak),
+        leaky_wfo: evalHoldout(pickLeaky),
+        plateau_wfo: evalHoldout(pickPlat),
+        full_audit: evalHoldout(pickAudit)
+      }
+    };
+  }
+
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

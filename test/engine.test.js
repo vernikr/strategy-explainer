@@ -831,4 +831,63 @@ for (const sc of E.MOEX_SCENARIOS) {
   assert(agg.short_sample_v3.tHm > agg.short_sample_v3.tHc && agg.short_sample_v3.tHm > agg.short_sample_v3.tCo);
 }
 
+// 44. Метрики честной валидации: PSR, DSR (плата за попытки и хвосты), CPCV (C(6,3)=20), PBO, стресс и гейт PASS
+{
+  assert.strictEqual(E.CPCV_SPLITS_6_3.length, 20);
+  assert.strictEqual(E.expectedMaxSR(1, 0.6), 0);
+  assert(E.expectedMaxSR(100, 0.6) > E.expectedMaxSR(10, 0.6));
+
+  // DSR монотонно падает с ростом числа попыток N и при утяжелении эксцесса kurt
+  const d1 = E.calcDSR(1.8, 360, 0, 3, 1, 0.55);
+  const d20 = E.calcDSR(1.8, 360, 0, 3, 20, 0.55);
+  const d300 = E.calcDSR(1.8, 360, 0, 3, 300, 0.55);
+  const dFat = E.calcDSR(1.8, 360, -0.9, 9.0, 20, 0.55);
+  assert(d1.dsr > 0.96 && d1.dsr > d20.dsr && d20.dsr > d300.dsr);
+  assert(d20.dsr > dFat.dsr);
+
+  // Проверка 6 условий промоушн-гейта PASS / BORDERLINE / REJECT (разд. 7.4)
+  const gPass = E.evalPromotionGate({ dsr: 0.98, pbo: 0.18, plateau: 0.78, oosBlocksPos: 4, stress2022Pos: true, hasThesis: true, enoughData: true });
+  assert.strictEqual(gPass.verdict, 'PASS');
+  const gBord = E.evalPromotionGate({ dsr: 0.92, pbo: 0.52, plateau: 0.65, oosBlocksPos: 3, stress2022Pos: true, hasThesis: true, enoughData: true });
+  assert.strictEqual(gBord.verdict, 'BORDERLINE');
+  const gNoThesis = E.evalPromotionGate({ dsr: 0.99, pbo: 0.10, plateau: 0.85, oosBlocksPos: 5, stress2022Pos: true, hasThesis: false, enoughData: true });
+  assert.strictEqual(gNoThesis.verdict, 'REJECT');
+  const gDeepFail = E.evalPromotionGate({ dsr: 0.98, pbo: 0.70, plateau: 0.80, oosBlocksPos: 4, stress2022Pos: true, hasThesis: true, enoughData: true });
+  assert.strictEqual(gDeepFail.verdict, 'REJECT');
+
+  // Стресс издержек и блочный бутстрап
+  const vdRob = E.genValidScenario(7, E.VALID_SCENARIOS[3]);
+  const stCost = E.costStressTest(vdRob.spread.slice(0, 360), 35, 1.85, 0.30, 0.45);
+  assert(stCost.breakEvenCost > 0.9 && stCost.survives2x);
+  const runRob = E.quickSpreadRun(vdRob.spread.slice(0, 360), 35, 1.85, 0.30, 0.45);
+  const boot = E.blockBootstrapCI(runRob.diffs.slice(35), { blockLen: 12, reps: 120, seed: 7 });
+  assert(boot.hi90 > boot.medianSR && boot.medianSR > boot.lo90 && boot.probPos > 0.80);
+}
+
+// 45. Сравнение 4 подходов к отбору параметров на неприкосновенном Holdout (4 сценария × 11 историй)
+{
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  const agg = {};
+  E.VALID_SCENARIOS.forEach((sc) => {
+    let tPk = 0, tLk = 0, tPl = 0, tAu = 0, rej = 0;
+    seeds.forEach((sd) => {
+      const vd = E.genValidScenario(sd, sc);
+      const r = E.backtestValidApproaches(vd);
+      if (r.gate.verdict === 'REJECT') rej++;
+      tPk += r.holdout.naive_peak.total;
+      tLk += r.holdout.leaky_wfo.total;
+      tPl += r.holdout.plateau_wfo.total;
+      tAu += r.holdout.full_audit.total;
+    });
+    agg[sc.id] = { tPk, tLk, tPl, tAu, rej };
+    console.log('валидация holdout, «' + sc.name + '»: пик ' + tPk.toFixed(0) + ', без чистки ' + tLk.toFixed(0) + ', плато ' + tPl.toFixed(0) + ', полный аудит ' + tAu.toFixed(0) + ' (REJECT ' + rej + '/11)');
+  });
+  assert(agg.spurious_peak.tPl > 150 && agg.spurious_peak.tPk < -100);
+  assert.strictEqual(agg.noise_mirage.rej, 11);
+  assert.strictEqual(agg.noise_mirage.tAu, 0);
+  assert(agg.noise_mirage.tPk < -200);
+  assert(agg.leak_overlap.tPl > 150 && agg.leak_overlap.tLk < 0);
+  assert(agg.robust_pass.tAu > 200 && agg.robust_pass.rej === 0);
+}
+
 console.log('OK: все проверки пройдены');
