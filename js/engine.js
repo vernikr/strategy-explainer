@@ -35,21 +35,31 @@
      breakAt: с этого дня связь «ломается» и спред уходит в сторону (режим рынка меняется). */
   function generate(opts) {
     const o = Object.assign(
-      { seed: 7, n: 320, base: 1000, level: 60, reversion: 0.12, noise: 2.2, walkStep: 4, breakAt: null, breakDrift: 0.6 },
+      { seed: 7, n: 320, base: 1000, level: 60, reversion: 0.12, noise: 2.2, walkStep: 4, breakAt: null, breakDrift: 0.6, beta: 1, betaTo: null, betaStart: 0, betaEnd: null },
       opts || {}
     );
+    // beta: во сколько раз инструмент A «размашистее» B при общем движении рынка (1 — одинаково).
+    // Если задан betaTo, beta плавно меняется от beta до betaTo между днями betaStart и betaEnd.
+    const betaAt = (t) => {
+      if (o.betaTo === null) return o.beta;
+      const e = o.betaEnd === null ? o.n - 1 : o.betaEnd;
+      const f = Math.min(1, Math.max(0, (t - o.betaStart) / Math.max(1, e - o.betaStart)));
+      return o.beta + (o.betaTo - o.beta) * f;
+    };
     const gauss = makeGauss(mulberry32(o.seed));
-    const a = [], b = [], spread = [];
+    const a = [], b = [], spread = [], beta = [];
     let walk = o.base, dev = 0;
     for (let t = 0; t < o.n; t++) {
       walk += o.walkStep * gauss();
       dev += -o.reversion * dev + o.noise * gauss();
       const drift = o.breakAt !== null && t >= o.breakAt ? o.breakDrift * (t - o.breakAt) : 0;
+      const bt = betaAt(t);
+      const wa = bt === 1 ? walk : o.base + bt * (walk - o.base); // при beta = 1 числа те же, что и раньше
       const pb = round2(walk);
-      const pa = round2(walk + o.level + dev + drift);
-      b.push(pb); a.push(pa); spread.push(round2(pa - pb));
+      const pa = round2(wa + o.level + dev + drift);
+      b.push(pb); a.push(pa); spread.push(round2(pa - pb)); beta.push(bt);
     }
-    return { a, b, spread, opts: o };
+    return { a, b, spread, beta, opts: o };
   }
 
   /* Скользящие среднее, стандартное отклонение (делим на N) и z-score.
@@ -161,6 +171,94 @@
     return { rows, sorted, median: med, absSorted, mad, std, value: series[t], z: std > 1e-9 ? (series[t] - med) / std : null, even: n % 2 === 0 };
   }
 
+
+  /* ---------- Динамический хедж ---------- */
+  /* Линейная регрессия y = alpha + k·x методом наименьших квадратов.
+     k = Σ(x − x̄)(y − ȳ) ÷ Σ(x − x̄)²  — «ковариация ÷ дисперсия» без деления на N;
+     alpha = ȳ − k·x̄. Здесь y — цена A, x — цена B: k показывает, на сколько пунктов в среднем
+     двигается A, когда B двигается на один пункт. Остатки (y − alpha − k·x) в сумме дают 0. */
+  function ols(x, y) {
+    const n = x.length;
+    let sx = 0, sy = 0;
+    for (let i = 0; i < n; i++) { sx += x[i]; sy += y[i]; }
+    const mx = sx / n, my = sy / n;
+    let sxx = 0, sxy = 0, syy = 0;
+    for (let i = 0; i < n; i++) { const dx = x[i] - mx, dy = y[i] - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+    if (!(sxx > 1e-12)) return { n, mx, my, sxx, sxy, syy, k: null, alpha: null, rss: null, r: null, r2: null, se: null };
+    const k = sxy / sxx, alpha = my - k * mx;
+    let rss = 0;
+    for (let i = 0; i < n; i++) { const e = y[i] - alpha - k * x[i]; rss += e * e; }
+    const r = syy > 1e-12 ? sxy / Math.sqrt(sxx * syy) : null;
+    // стандартная ошибка наклона: насколько «шатается» k из-за шума в окне (делим на N − 2: две величины, k и alpha, уже оценены)
+    const se = n > 2 ? Math.sqrt(rss / (n - 2) / sxx) : null;
+    return { n, mx, my, sxx, sxy, syy, k, alpha, rss, r, r2: r === null ? null : r * r, se };
+  }
+
+  /* Число контрактов B на lots контрактов A при целочисленном округлении; lots = 0 — округления нет. */
+  const roundK = (k, lots) => (lots > 0 ? Math.round(k * lots) / lots : k);
+
+  /* Спред A − k·B с ежедневным пересчётом k по окну из N последних дней (включая сегодня, без будущего).
+     Дальше работает обычный z-score: берём спред, посчитанный с СЕГОДНЯШНИМ k по всем дням окна,
+     и сравниваем сегодняшнее значение со средним и σ (делим на N) этого окна.
+     Без округления среднее спреда равно alpha, а σ — корню из среднего квадрата остатков регрессии. */
+  function hedgeStats(a, b, n, opts) {
+    const lots = (opts && opts.lots) || 0, len = a.length;
+    const mk = () => new Array(len).fill(null);
+    const out = { k: mk(), kUsed: mk(), alpha: mk(), se: mk(), r: mk(), r2: mk(), mean: mk(), std: mk(), z: mk(), spread: mk() };
+    for (let t = n - 1; t < len; t++) {
+      const wa = a.slice(t - n + 1, t + 1), wb = b.slice(t - n + 1, t + 1);
+      const f = ols(wb, wa);
+      if (f.k === null) continue;
+      const ku = roundK(f.k, lots);
+      let sum = 0;
+      for (let j = 0; j < n; j++) sum += wa[j] - ku * wb[j];
+      const m = sum / n;
+      let sq = 0;
+      for (let j = 0; j < n; j++) { const d = wa[j] - ku * wb[j] - m; sq += d * d; }
+      const sd = Math.sqrt(sq / n), st = a[t] - ku * b[t];
+      out.k[t] = f.k; out.kUsed[t] = ku; out.alpha[t] = f.alpha; out.se[t] = f.se; out.r[t] = f.r; out.r2[t] = f.r2;
+      out.mean[t] = m; out.std[t] = sd; out.spread[t] = st;
+      out.z[t] = sd > 1e-9 ? (st - m) / sd : null;
+    }
+    return out;
+  }
+
+  // Все промежуточные числа одного дня для экрана «Пошаговый разбор».
+  function explainHedge(a, b, n, t, opts) {
+    if (t < n - 1) return null;
+    const lots = (opts && opts.lots) || 0;
+    const wa = a.slice(t - n + 1, t + 1), wb = b.slice(t - n + 1, t + 1);
+    const f = ols(wb, wa);
+    if (f.k === null) return null;
+    const kUsed = roundK(f.k, lots);
+    const rows = wa.map((y, j) => {
+      const x = wb[j], dx = x - f.mx, dy = y - f.my, fit = f.alpha + f.k * x, res = y - fit;
+      return { idx: t - n + 1 + j, x, y, dx, dy, dxx: dx * dx, dxy: dx * dy, fit, res, res2: res * res, spread: y - kUsed * x };
+    });
+    const mean = rows.reduce((q, r) => q + r.spread, 0) / n;
+    const variance = rows.reduce((q, r) => q + (r.spread - mean) * (r.spread - mean), 0) / n;
+    const std = Math.sqrt(variance), cur = rows[rows.length - 1].spread;
+    return Object.assign({ rows, kUsed, lots, mean, variance, std, value: cur, z: std > 1e-9 ? (cur - mean) / std : null }, f);
+  }
+
+  /* Бэктест динамического хеджа: те же правила и издержки, что у остальных стратегий. */
+  function backtestHedge(a, b, params) {
+    const p = Object.assign({}, DEFAULTS, { lots: 0 }, params || {});
+    const h = hedgeStats(a, b, p.n, { lots: p.lots });
+    const res = simulate(h.spread, h, p, { a, b, k: h.kUsed });
+    res.hedge = h;
+    return res;
+  }
+
+  // Учебные сценарии «инструменты двигаются в разной степени». beta — во сколько раз A размашистее B.
+  const HEDGE_SCENARIOS = [
+    { id: 'one', name: 'Равные движения (β = 1)', opts: { beta: 1 }, note: 'A и B двигаются вместе один в один. Простой спред A − B уже «чистый»: коэффициент хеджирования, равный 1, здесь верен.' },
+    { id: 'const', name: 'A размашистее в 1,6 раза', opts: { beta: 1.6 }, note: 'Когда рынок меняется на 10 пунктов, B меняется на 10, а A — на 16. Простой спред A − B получает «чужой» тренд, а верный коэффициент всё время 1,6.' },
+    { id: 'drift', name: 'Связь меняется со временем', opts: { beta: 1, betaTo: 1.8, betaStart: 80, betaEnd: 240 }, note: 'С 80-го по 240-й день A становится всё размашистее: верный коэффициент плавно растёт с 1,0 до 1,8. Его надо отслеживать.' },
+    { id: 'break', name: 'A размашистее + слом связи', opts: { beta: 1.6, breakAt: 200 }, note: 'Как второй сценарий, но с 200-го дня связь ломается: A устойчиво уходит от B и не возвращается.' }
+  ];
+  const genHedge = (seed, scn) => generate(Object.assign({ seed }, scn.opts));
+
   const stats = (series, n, mode) => (mode === 'ewma' ? ewma(series, n) : mode === 'robust' ? robust(series, n) : rolling(series, n));
 
   /* Все промежуточные числа для одного дня: то, что показывает экран «Пошаговый разбор». */
@@ -197,8 +295,17 @@
      0 = вне рынка. Результат сделки в пунктах = направление × (спред на выходе − спред на входе) − издержки. */
   function backtest(series, params) {
     const p = Object.assign({}, DEFAULTS, params || {});
+    return simulate(series, stats(series, p.n, p.mode), p, null);
+  }
+
+  /* Ядро симулятора. legs === null: спред — готовый ряд series (A − B).
+     legs = { a, b, k }: спред A − k·B, где k пересчитывается каждый день; но в сделке k ЗАМОРАЖИВАЕТСЯ
+     на значении момента решения (число контрактов уже куплено и не меняется), поэтому результат
+     сделки считается как (A на выходе − A на входе) − k × (B на выходе − B на входе). */
+  function simulate(series, st, p, legs) {
     const len = series.length;
-    const { mean, std, z } = stats(series, p.n, p.mode);
+    const { mean, std, z } = st;
+    const val = (t, k) => (legs ? legs.a[t] - k * legs.b[t] : series[t]);
     const trades = [];
     const equity = new Array(len).fill(0);
     const pos = new Array(len).fill(0);
@@ -209,13 +316,15 @@
     function apply(act, t, signalIdx) {
       if (act.type === 'open') {
         cur = act.dir;
-        entry = { dir: act.dir, signalIdx, execIdx: t, s: series[t], z: z[signalIdx] };
+        const k = legs ? legs.k[signalIdx] : null;
+        entry = { dir: act.dir, signalIdx, execIdx: t, k, s: val(t, k), z: z[signalIdx] };
         realized -= p.cost;
       } else {
-        const gross = entry.dir * (series[t] - entry.s);
+        const exitS = val(t, entry.k);
+        const gross = entry.dir * (exitS - entry.s);
         trades.push({
           dir: entry.dir, signalIn: entry.signalIdx, entryIdx: entry.execIdx, exitIdx: t,
-          signalOut: signalIdx, entryS: entry.s, exitS: series[t], entryZ: entry.z, exitZ: z[signalIdx],
+          signalOut: signalIdx, entryS: entry.s, exitS, entryZ: entry.z, exitZ: z[signalIdx], k: entry.k,
           reason: act.reason, gross, cost: p.cost, net: gross - p.cost, bars: t - entry.execIdx
         });
         realized += gross;
@@ -236,7 +345,7 @@
         }
       }
       pos[t] = cur;
-      equity[t] = realized + (cur !== 0 ? cur * (series[t] - entry.s) : 0);
+      equity[t] = realized + (cur !== 0 ? cur * (val(t, entry.k) - entry.s) : 0);
     }
     if (cur !== 0) {
       const last = len - 1;
@@ -299,7 +408,7 @@
   // Вероятность того, что нормальная величина отклонится от среднего больше чем на k сигм (в любую сторону).
   const tailTwoSided = (k) => 1 - erf(k / Math.SQRT2);
 
-  const api = { generate, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

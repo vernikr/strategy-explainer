@@ -160,6 +160,121 @@ for (const n of [5, 20, 60]) {
   assert.ok(plainJump > 4 * robustJump + 3, `обычная +${plainJump}, робастная +${robustJump}`);
 }
 
+// 17. Регрессия: ручной пример. B = 101…105, A = 214, 216, 217, 218, 220.
+// Средние: B̄ = 103, Ā = 217. Σ(x−x̄)² = 10, Σ(x−x̄)(y−ȳ) = 14 → k = 1,4; alpha = 217 − 1,4·103 = 72,8.
+{
+  const B = [101, 102, 103, 104, 105], Aa = [214, 216, 217, 218, 220];
+  const f = E.ols(B, Aa);
+  close(f.mx, 103); close(f.my, 217); close(f.sxx, 10); close(f.sxy, 14); close(f.syy, 20);
+  close(f.k, 1.4); close(f.alpha, 72.8);
+  close(f.rss, 0.4);                           // остатки −0,2; 0,4; 0; −0,4; 0,2 → квадраты 0,04+0,16+0+0,16+0,04
+  close(f.se, Math.sqrt(0.4 / 3 / 10));        // √(0,4 ÷ (5−2) ÷ 10)
+  close(f.r, 14 / Math.sqrt(200)); close(f.r2, 0.98);
+  const res = B.map((x, i) => Aa[i] - f.alpha - f.k * x);
+  close(res.reduce((q, v) => q + v, 0), 0);    // остатки в сумме дают ноль
+  [-0.2, 0.4, 0, -0.4, 0.2].forEach((v, i) => close(res[i], v));
+  // z-score на последний день: спред A − 1,4·B = 73,0; среднее окна = alpha = 72,8; σ = √(0,4 ÷ 5) = √0,08
+  const h = E.hedgeStats(Aa, B, 5);
+  close(h.k[4], 1.4); close(h.kUsed[4], 1.4); close(h.mean[4], 72.8); close(h.std[4], Math.sqrt(0.08));
+  close(h.spread[4], 73); close(h.z[4], 0.2 / Math.sqrt(0.08));
+  assert.strictEqual(h.z[3], null);
+  // округление до целых контрактов: на lots контрактов A берём round(k·lots) контрактов B
+  close(E.roundK(1.4, 0), 1.4); close(E.roundK(1.4, 1), 1); close(E.roundK(1.4, 2), 1.5); close(E.roundK(1.4, 5), 1.4); close(E.roundK(1.4, 10), 1.4);
+  close(E.roundK(1.46, 10), 1.5);
+  const hr = E.hedgeStats(Aa, B, 5, { lots: 1 });
+  close(hr.kUsed[4], 1); close(hr.spread[4], 220 - 105);
+  // B не меняется: регрессия невозможна, z нет
+  const flat = E.hedgeStats(Aa, [100, 100, 100, 100, 100], 5);
+  assert.strictEqual(flat.k[4], null); assert.strictEqual(flat.z[4], null);
+}
+
+// 18. Генератор: при beta = 1 данные те же, что раньше; beta плавно меняется; хедж «снимает» beta.
+{
+  const old = E.generate({ seed: 3 }), nw = E.generate({ seed: 3, beta: 1 });
+  assert.deepStrictEqual(old.a, nw.a); assert.deepStrictEqual(old.spread, nw.spread);
+  const dr = E.genHedge(3, E.HEDGE_SCENARIOS[2]);
+  close(dr.beta[0], 1); close(dr.beta[80], 1); close(dr.beta[160], 1.4); close(dr.beta[240], 1.8); close(dr.beta[319], 1.8);
+  // A − B при beta = 1,6 уходит намного дальше, чем спред с верным k
+  const cs = E.genHedge(3, E.HEDGE_SCENARIOS[1]);
+  const range = (x) => Math.max(...x) - Math.min(...x);
+  assert.ok(range(cs.spread) > 3 * range(cs.a.map((v, i) => v - 1.6 * cs.b[i])), 'A−B должен уходить намного дальше');
+  // хедж не зависит от beta: при beta = 1 и beta = 1,6 спред с пересчётом k почти один и тот же
+  const h1 = E.hedgeStats(E.genHedge(3, E.HEDGE_SCENARIOS[0]).a, E.genHedge(3, E.HEDGE_SCENARIOS[0]).b, 30);
+  const h2 = E.hedgeStats(cs.a, cs.b, 30);
+  for (let t = 29; t < 320; t += 17) { close(h2.k[t] - h1.k[t], 0.6, 0.02); close(h1.z[t], h2.z[t], 0.02); }
+  // k действительно следует за beta
+  const hd = E.hedgeStats(dr.a, dr.b, 40);
+  let err = 0, cnt = 0;
+  for (let t = 39; t < 320; t++) { err += Math.abs(hd.k[t] - dr.beta[t]); cnt++; }
+  assert.ok(err / cnt < 0.35, 'средняя ошибка k ' + err / cnt);
+  close(hd.k[319], 1.8, 0.4);
+}
+
+// 19. Разбор дня совпадает с расчётом; нет заглядывания в будущее.
+{
+  const d = E.genHedge(4, E.HEDGE_SCENARIOS[2]);
+  for (const lots of [0, 3]) {
+    for (const n of [10, 30, 61]) {
+      const h = E.hedgeStats(d.a, d.b, n, { lots });
+      for (const t of [n - 1, 120, 319]) {
+        const ex = E.explainHedge(d.a, d.b, n, t, { lots });
+        close(ex.k, h.k[t]); close(ex.kUsed, h.kUsed[t]); close(ex.alpha, h.alpha[t]); close(ex.se, h.se[t]);
+        close(ex.mean, h.mean[t]); close(ex.std, h.std[t]); close(ex.z, h.z[t]); close(ex.value, h.spread[t]);
+        close(ex.rows.reduce((q, r) => q + r.dxy, 0), ex.sxy, 1e-6); close(ex.rows.reduce((q, r) => q + r.dxx, 0), ex.sxx, 1e-6);
+        close(ex.rows.reduce((q, r) => q + r.res, 0), 0, 1e-6);
+        close(ex.rows.reduce((q, r) => q + r.res2, 0), ex.rss, 1e-6);
+        if (!lots) close(ex.mean, ex.alpha, 1e-6); // без округления среднее спреда равно alpha
+      }
+    }
+  }
+  const a2 = d.a.slice(), b2 = d.b.slice();
+  for (let i = 151; i < 320; i++) { a2[i] += 40; b2[i] -= 25; }
+  const h = E.hedgeStats(d.a, d.b, 25), g2 = E.hedgeStats(a2, b2, 25);
+  for (let t = 0; t <= 150; t++) { assert.strictEqual(h.z[t], g2.z[t]); assert.strictEqual(h.k[t], g2.k[t]); }
+}
+
+// 20. Бэктест хеджа: P&L пересчитывается независимо по ногам с k на момент решения (он заморожен в сделке).
+{
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const d = E.genHedge(seed, E.HEDGE_SCENARIOS[2]);
+    for (const delay of [0, 1]) {
+      for (const lots of [0, 4]) {
+        const res = E.backtestHedge(d.a, d.b, { delay, lots, maxHold: 15 });
+        close(res.equity[res.equity.length - 1], res.metrics.total, 1e-6);
+        assert.ok(res.trades.length > 3);
+        res.trades.forEach((q) => {
+          close(q.k, res.hedge.kUsed[q.signalIn], 1e-12);   // k взят в день решения, а не в день исполнения
+          const legsPnl = q.dir * ((d.a[q.exitIdx] - d.a[q.entryIdx]) - q.k * (d.b[q.exitIdx] - d.b[q.entryIdx]));
+          close(q.gross, legsPnl, 1e-9);
+          close(q.net, q.dir * (q.exitS - q.entryS) - q.cost, 1e-9);
+          if (lots) close(q.k * lots, Math.round(q.k * lots), 1e-9); // число контрактов B — целое
+        });
+      }
+    }
+  }
+  // сценарий без заглядывания: тот же бэктест на обрезанных данных даёт те же первые сделки
+  const d = E.genHedge(2, E.HEDGE_SCENARIOS[1]);
+  const full = E.backtestHedge(d.a, d.b, { delay: 0 }), cut = E.backtestHedge(d.a.slice(0, 200), d.b.slice(0, 200), { delay: 0 });
+  const done = (r) => r.trades.filter((q) => q.reason !== 'end' && q.exitIdx < 190);
+  assert.deepStrictEqual(done(full).map((q) => [q.entryIdx, q.exitIdx, q.net]), done(cut).map((q) => [q.entryIdx, q.exitIdx, q.net]));
+}
+
+// 21. Старые стратегии не изменились после выделения simulate(): ручной пример из теста 1 даёт прежние сделки.
+{
+  const r2 = E.backtest(s, base);
+  assert.strictEqual(r2.trades.length, 2); assert.strictEqual(r2.trades[0].k, null);
+}
+
+// 22. Сводка по хеджу (смотрим глазами).
+for (const sc of E.HEDGE_SCENARIOS) {
+  let pl = 0, hg = 0;
+  [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42].forEach((sd) => {
+    const d = E.genHedge(sd, sc);
+    pl += E.backtest(d.spread, {}).metrics.total; hg += E.backtestHedge(d.a, d.b, {}).metrics.total;
+  });
+  console.log('хедж, сценарий «' + sc.name + '»: простой A−B ' + pl.toFixed(0) + ', с хеджем ' + hg.toFixed(0));
+}
+
 // 8. Сводка по учебным данным (смотрим глазами, что сделок достаточно).
 for (const seed of [7, 11]) {
   const m = E.backtest(E.generate({ seed }).spread, {}).metrics;
