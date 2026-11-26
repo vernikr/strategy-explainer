@@ -7,7 +7,7 @@
   let stratId = 'zscore', stepIdx = 0;
   const visited = {};
   const strategies = () => window.STRATEGIES;
-  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS, robust: window.RBSCREENS, hedge: window.HSCREENS, coint: window.CSCREENS, calendar: window.CALSCREENS, tactics: window.TSCREENS })[id] || [];
+  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS, robust: window.RBSCREENS, hedge: window.HSCREENS, coint: window.CSCREENS, calendar: window.CALSCREENS, tactics: window.TSCREENS, fx: window.FXSCREENS })[id] || [];
 
   function parseHash() {
     const m = location.hash.match(/^#([a-z0-9_-]+)(?:\/(\d+))?/);
@@ -57,7 +57,7 @@
   function renderStub(s, steps, root) {
     steps.innerHTML = '<h4>' + s.name + ' · план</h4>' + s.plan.map((t, i) => '<div class="step" style="cursor:default;opacity:.7"><span class="num">' + (i + 1) + '</span><span>' + t + '</span></div>').join('');
     root.innerHTML = '<h1>' + s.name + '</h1><p class="lead">' + s.lead + '</p>' +
-      '<div class="stub"><div class="card"><h4>Статус</h4><p><span class="pill time">В разработке</span> Подробный разбор появится позже. Сейчас полностью объяснены: ' + strategies().filter((x) => x.ready).map((x) => x.name).join(' и ') + '.</p></div>' +
+      '<div class="stub"><div class="card"><h4>Статус</h4><p><span class="pill time">В разработке</span> Подробный разбор появится позже. Сейчас полностью объяснены: ' + strategies().filter((x) => x.ready).map((x) => x.name).join(', ') + '.</p></div>' +
       '<div class="card"><h4>Чем отличается от простого z-score</h4><p>' + s.diff + '</p></div>' +
       '<div class="card"><h4>Что будет объяснено</h4><p>' + s.plan.join(' · ') + '</p></div>' +
       '<button class="b primary" id="back">← Вернуться к разбору z-score</button></div>';
