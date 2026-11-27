@@ -261,9 +261,9 @@
         <li><b>Подбираем объём третьей ноги.</b> Если открыта позиция на <code>V</code> долларов внешнего актива, а стандартный валютный фьючерс равен <code>1 000 $</code>, нужно взять <code>V ÷ 1 000</code> валютных контрактов (округляя до ближайшего целого числа).</li>
         <li><b>Считаем три отдельные ${T('var_margin', 'вариационные маржи')}.</b> Внутренняя нога сразу в рублях; зарубежная — сначала в долларах, а затем переводится по курсу выхода; валютная нога — разница курсов, умноженная на число лотов FX.</li>
         <li><b>Проверяем ${T('cross_term', 'перекрёстную добавку')} и остаток округления.</b> Если число лотов FX округлялось (например, на 2 600 $ взяли 3 лота по 1 000 $), лишние 400 $ дают крошечную остаточную чувствительность к курсу.</li>
-        <li><b>Вычитаем тройные издержки.</b> Вместо двух стаканов мы входим и выходим в трёх — комиссия и проскальзывание выше примерно в 1,3–1,5 раза.</li>
+        <li><b>Вычитаем тройные издержки и проверяем ${T('cross_broker_tax', 'налоговое сальдирование контуров')}.</b> Если внутренняя и валютная ноги открыты у российского брокера, а внешняя — на отдельном зарубежном счёте, налоговый агент в РФ удержит <b>13–15% НДФЛ со всей плюсовой стороны без автоматического вычета внешнего убытка</b>!</li>
       </ol>
-      <div class="note"><b>Практический совет.</b> Чем крупнее рабочий объём пакета (например, 10 000 $ вместо 2 600 $), тем точнее делится сумма на стандартный лот 1 000 $ и тем меньше погрешность округления валютного хеджа.</div>`,
+      <div class="note"><b>Практический совет.</b> Чем крупнее рабочий объём пакета (например, 10 000 $ вместо 2 600 $), тем меньше погрешность округления FX-лота — но при торговле через разные налоговые контуры обязательно проверяйте строку 6 справа!</div>`,
     mount(el) {
       el.innerHTML = `
         <div class="viz">
@@ -318,6 +318,11 @@
         const netExact = rubDom + rubWorld + rubFxExact - feeRub;
         const netInt = rubDom + rubWorld + rubFxInt - feeRub;
         const roundErr = rubFxInt - rubFxExact;
+        const rfContourPnl = rubDom + rubFxInt - feeRub * 0.67;
+        const extContourPnl = rubWorld - feeRub * 0.33;
+        const rfTax13 = Math.max(0, rfContourPnl) * 0.13;
+        const singleTax13 = Math.max(0, netInt) * 0.13;
+        const afterSplitTax = netInt - rfTax13;
 
         const rub = (v) => '<span class="' + (v >= 0 ? 'pos' : 'neg') + '">' + U.sgn(v, 0) + ' ₽</span>';
         el.querySelector('#steps3').innerHTML = `
@@ -325,7 +330,8 @@
           <div class="row"><div class="n">2</div><div><b>Нога 1 — внутренняя площадка (в рублях)</b>: цена ${f(domIn)} → ${f(domOut)} п. (спред на выходе ${U.sgn(c.spOut)} п.)<div class="v">${q} × (${c.dir > 0 ? '+1' : '−1'}) × (${f(domOut)} − ${f(domIn)}) × 100 ₽ = ${rub(rubDom)}</div></div></div>
           <div class="row"><div class="n">3</div><div><b>Нога 2 — внешняя площадка (в $ с переводом по курсу выхода ${c.fxOut} ₽/$)</b>: цена ${c.wIn} → ${c.wOut} $<div class="v">${U.sgn(usdWorld, 0)} $ × ${c.fxOut} ₽/$ = ${rub(rubWorld)}</div></div></div>
           <div class="row"><div class="n">4</div><div><b>Нога 3 — валютный фьючерс (${intFxLots} лота по 1 000 $)</b>: курс ${c.fxIn} → ${c.fxOut} ₽/$<div class="v">(${c.dir > 0 ? '−1' : '+1'}) × ${hedgedUsd.toLocaleString('ru-RU')} $ × (${c.fxOut} − ${c.fxIn}) = ${rub(rubFxInt)} (погрешность округления лота: ${rub(roundErr)})</div></div></div>
-          <div class="row"><div class="n">5</div><div><b>Чистый итог после издержек (${Math.round(feeRub).toLocaleString('ru-RU')} ₽)</b><div class="v">С валютным хеджем (целые лоты): <b>${rub(netInt)}</b> · идеальный дробный хедж: ${rub(netExact)} · если бы забыли 3-ю ногу: ${rub(netNoFx)}</div></div></div>`;
+          <div class="row"><div class="n">5</div><div><b>До налогов после издержек (${Math.round(feeRub).toLocaleString('ru-RU')} ₽)</b><div class="v">С валютным хеджем (целые лоты): <b>${rub(netInt)}</b> · идеальный дробный хедж: ${rub(netExact)} · без 3-й ноги: ${rub(netNoFx)}</div></div></div>
+          <div class="row"><div class="n">6</div><div><b>Проверка НДФЛ 13%: единый контур против разных контуров без сальдирования</b> — счёт РФ: ${rub(rfContourPnl)}, внешний счёт: ${rub(extContourPnl)}<div class="v">В одном контуре налог −${Math.round(singleTax13).toLocaleString('ru-RU')} ₽ (на руки <b>${rub(netInt - singleTax13)}</b>) · В разных контурах налог с РФ-счёта −${Math.round(rfTax13).toLocaleString('ru-RU')} ₽ → на руки <b>${rub(afterSplitTax)}</b>!</div></div></div>`;
       }
       draw3();
     }

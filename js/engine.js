@@ -5263,7 +5263,62 @@
     return { canSend: items.every((x) => x.ok) && !driftWarn, items, driftWarn, liveSlipRatio: s.liveSlipRatio };
   }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, riskAdjustedMetrics, SCREENER_POOL_SAMPLE, evalHardGates, calcCompositeScore, evalPreTradeChecklist, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, tripleBarrierLabel, kaplanMeierSurvival, fitMetaLabeler, predictMetaProb, conformalInterval, evalRlSafeguards, ML_SCENARIOS, genMlScenario, mlBarFeatures, backtestMlApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  /* =========================================================================
+   * Трёхсценарный L2-реплей книги заявок (§6.2–6.3) и межконтурный налог (#77)
+   * ========================================================================= */
+  function replayL2OrderBook(opts) {
+    const o = Object.assign({
+      lots: 5,
+      baseHalfSpread: 0.22,
+      levelStep: 0.14,
+      levelDepth: 3,
+      legSyncLag: 0.10,
+      feesRoundTrip: 0.28
+    }, opts || {});
+
+    function walkBook(lots, halfSp, step, depthPerLvl) {
+      let rem = Math.max(1, lots), lvl = 0, costSum = 0;
+      const d = Math.max(1, depthPerLvl);
+      while (rem > 0) {
+        const take = Math.min(rem, d);
+        costSum += take * (halfSp + lvl * step);
+        rem -= take;
+        lvl++;
+      }
+      return costSum / Math.max(1, lots);
+    }
+
+    const topSlip = 4 * o.baseHalfSpread;
+    const realOneCross = walkBook(o.lots, o.baseHalfSpread, o.levelStep, o.levelDepth);
+    const realSlip = 4 * realOneCross + 2 * o.legSyncLag;
+    const stressOneCross = walkBook(o.lots, o.baseHalfSpread * 2.1, o.levelStep * 1.8, Math.max(1, Math.floor(o.levelDepth / 3)));
+    const stressSlip = 4 * stressOneCross + 2 * (o.legSyncLag * 3.2);
+
+    return {
+      lots: o.lots,
+      fees: o.feesRoundTrip,
+      optimistic: { slip: topSlip, total: o.feesRoundTrip + topSlip },
+      realistic: { slip: realSlip, total: o.feesRoundTrip + realSlip },
+      stressed: { slip: stressSlip, total: o.feesRoundTrip + stressSlip }
+    };
+  }
+
+  function calcCrossBrokerTax(grossSpreadRub, legSwingRub, taxRatePct) {
+    const rate = (taxRatePct === undefined ? 13 : taxRatePct) / 100;
+    const gainLeg = Math.max(0, grossSpreadRub) + Math.abs(legSwingRub || 0);
+    const lossLeg = -Math.abs(legSwingRub || 0) + Math.min(0, grossSpreadRub);
+    const singleContourTax = Math.max(0, gainLeg + lossLeg) * rate;
+    const singleContourNet = (gainLeg + lossLeg) - singleContourTax;
+    const splitContourTax = Math.max(0, gainLeg) * rate;
+    const splitContourNet = (gainLeg + lossLeg) - splitContourTax;
+    return {
+      gainLeg, lossLeg, grossTotal: gainLeg + lossLeg,
+      singleContourTax, singleContourNet,
+      splitContourTax, splitContourNet
+    };
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, replayL2OrderBook, calcCrossBrokerTax, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, riskAdjustedMetrics, SCREENER_POOL_SAMPLE, evalHardGates, calcCompositeScore, evalPreTradeChecklist, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, tripleBarrierLabel, kaplanMeierSurvival, fitMetaLabeler, predictMetaProb, conformalInterval, evalRlSafeguards, ML_SCENARIOS, genMlScenario, mlBarFeatures, backtestMlApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

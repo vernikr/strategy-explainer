@@ -1038,4 +1038,19 @@ for (const sc of E.MOEX_SCENARIOS) {
   assert(chkOk.canSend && !chkExpired.canSend && !chkDrift.canSend && chkDrift.driftWarn);
 }
 
+// 51. L2-реплей книги заявок и налоговая асимметрия контуров (#77)
+{
+  const l2Small = E.replayL2OrderBook({ lots: 1 });
+  const l2Big = E.replayL2OrderBook({ lots: 12 });
+  assert(l2Big.realistic.total > l2Big.optimistic.total);
+  assert(l2Big.stressed.total > l2Big.realistic.total);
+  assert(l2Big.realistic.total > l2Small.realistic.total);
+
+  const tx = E.calcCrossBrokerTax(40000, 200000, 13);
+  // В одном контуре 13% от +40 000 = 5 200 ₽ (чистыми +34 800 ₽), а в разных контурах 13% от +240 000 = 31 200 ₽ (чистыми лишь +8 800 ₽!)
+  assert.strictEqual(tx.singleContourTax, 5200);
+  assert.strictEqual(tx.splitContourTax, 31200);
+  assert(tx.splitContourNet < tx.singleContourNet);
+}
+
 console.log('OK: все проверки пройдены');
