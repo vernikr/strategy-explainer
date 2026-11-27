@@ -7,7 +7,7 @@
   let stratId = 'zscore', stepIdx = 0;
   const visited = {};
   const strategies = () => window.STRATEGIES;
-  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS, robust: window.RBSCREENS, hedge: window.HSCREENS, coint: window.CSCREENS, calendar: window.CALSCREENS, tactics: window.TSCREENS, fx: window.FXSCREENS, baskets: window.BSCREENS, moex: window.MXSCREENS, diag: window.DGSCREENS, bands: window.BDSCREENS, regime: window.RGSCREENS, valid: window.VLSCREENS, book: window.BKSCREENS })[id] || [];
+  const screensOf = (id) => ({ zscore: window.ZSCREENS, ewma: window.EWSCREENS, robust: window.RBSCREENS, hedge: window.HSCREENS, coint: window.CSCREENS, calendar: window.CALSCREENS, tactics: window.TSCREENS, fx: window.FXSCREENS, baskets: window.BSCREENS, moex: window.MXSCREENS, diag: window.DGSCREENS, bands: window.BDSCREENS, regime: window.RGSCREENS, valid: window.VLSCREENS, book: window.BKSCREENS, ml: window.MLSCREENS })[id] || [];
 
   function parseHash() {
     const m = location.hash.match(/^#([a-z0-9_-]+)(?:\/(\d+))?/);
