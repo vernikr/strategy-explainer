@@ -1,7 +1,45 @@
-/* Навигация: переключатель стратегий, список экранов, подсказки терминов. Загружается последним. */
+/* Навигация: переключатель стратегий, список экранов, переключатель темы, подсказки терминов. Загружается последним. */
 (function () {
   'use strict';
-  const A = window.App;
+  const U = window.UI;
+
+  /* ---------- переключатель темы ---------- */
+  const THEME_KEY = 'se-theme';
+  const themeBox = document.getElementById('theme-switch');
+
+  function getTheme() {
+    const t = document.documentElement.getAttribute('data-theme');
+    return t === 'classic' ? 'classic' : 'claude';
+  }
+
+  function syncThemeButtons() {
+    if (!themeBox) return;
+    const cur = getTheme();
+    themeBox.querySelectorAll('button[data-theme-val]').forEach((btn) => {
+      const active = btn.dataset.themeVal === cur;
+      btn.classList.toggle('on', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  function setTheme(next) {
+    const val = next === 'classic' ? 'classic' : 'claude';
+    const prev = getTheme();
+    document.documentElement.setAttribute('data-theme', val);
+    try { localStorage.setItem(THEME_KEY, val); } catch (_) {}
+    syncThemeButtons();
+    if (U && U.syncThemeColors) U.syncThemeColors();
+    if (prev !== val) render(true);
+  }
+
+  if (themeBox) {
+    syncThemeButtons();
+    themeBox.addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('button[data-theme-val]');
+      if (!btn) return;
+      setTheme(btn.dataset.themeVal);
+    });
+  }
 
   /* ---------- маршрутизация ---------- */
   let stratId = 'zscore', stepIdx = 0;
@@ -18,7 +56,8 @@
 
   function go(id, idx) { location.hash = '#' + id + (idx ? '/' + (idx + 1) : ''); }
 
-  function render() {
+  function render(keepScroll) {
+    const prevScrollY = keepScroll ? window.scrollY : 0;
     if (window.__stepTimer) { clearInterval(window.__stepTimer); window.__stepTimer = null; }
     const s = strategies().find((x) => x.id === stratId);
     const tiers = window.STRATEGY_TIERS || [];
@@ -38,7 +77,7 @@
 
     const steps = document.getElementById('steps');
     const root = document.getElementById('screen');
-    if (!s.ready) { renderStub(s, steps, root); window.scrollTo(0, 0); return; }
+    if (!s.ready) { renderStub(s, steps, root); window.scrollTo(0, prevScrollY); return; }
 
     const sc = screensOf(s.id);
     const seen = (visited[s.id] = visited[s.id] || new Set());
@@ -63,7 +102,7 @@
     const p = document.getElementById('prev'), n = document.getElementById('next');
     if (p) p.addEventListener('click', () => go(s.id, stepIdx - 1));
     if (n) n.addEventListener('click', () => go(s.id, stepIdx + 1));
-    window.scrollTo(0, 0);
+    window.scrollTo(0, prevScrollY);
   }
 
   function renderStub(s, steps, root) {

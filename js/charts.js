@@ -1,12 +1,43 @@
-/* Лёгкая отрисовка графиков на canvas и мелкие помощники форматирования. */
+/* Лёгкая отрисовка графиков на canvas, палитры тем и мелкие помощники форматирования. */
 (function () {
   'use strict';
 
-  const COLORS = {
-    grid: '#232a38', axis: '#8b95a7', text: '#aeb8c8',
-    a: '#5aa9ff', b: '#f5a65b', spread: '#7ee0b5', mean: '#c9b6ff', z: '#7ee0b5',
-    up: '#35d07f', down: '#ff6b6b', exit: '#ffd166', neutral: '#8b95a7'
+  const PALETTES = {
+    classic: {
+      grid: '#232a38', axis: '#8b95a7', text: '#aeb8c8',
+      a: '#5aa9ff', b: '#f5a65b', spread: '#7ee0b5', mean: '#c9b6ff', z: '#7ee0b5',
+      up: '#35d07f', down: '#ff6b6b', exit: '#ffd166', neutral: '#8b95a7',
+      labelBg: '#151a24d9', cursor: '#ffffff55', hover: '#ffffff40',
+      font: '11px "Segoe UI", Roboto, sans-serif'
+    },
+    claude: {
+      grid: 'rgba(222, 220, 209, 0.085)', axis: '#9c9a92', text: '#c3c1b7',
+      a: '#6aabf1', b: '#e5a93b', spread: '#d97757', mean: '#b4a5f6', z: '#d97757',
+      up: '#6bc978', down: '#eb6263', exit: '#e5a93b', neutral: '#9c9a92',
+      labelBg: 'rgba(33, 33, 32, 0.88)', cursor: 'rgba(250, 249, 245, 0.34)', hover: 'rgba(250, 249, 245, 0.24)',
+      font: '11px "anthropic-sans", "Styrene B LC", -apple-system, "Segoe UI", sans-serif'
+    }
   };
+
+  function currentTheme() {
+    const t = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme');
+    return t === 'classic' ? 'classic' : 'claude';
+  }
+
+  const COLORS = Object.assign({}, PALETTES[currentTheme()]);
+  const liveCharts = new Set();
+
+  function syncThemeColors() {
+    Object.assign(COLORS, PALETTES[currentTheme()]);
+    liveCharts.forEach((inst) => {
+      if (inst && inst.c && inst.c.isConnected) inst.draw();
+      else liveCharts.delete(inst);
+    });
+  }
+
+  function registerChart(inst) {
+    liveCharts.add(inst);
+  }
 
   const MINUS = '−';
   function fmt(x, d) {
@@ -29,6 +60,7 @@
     canvas.addEventListener('mousemove', (e) => this.onMove(e));
     canvas.addEventListener('mouseleave', () => { this.hover = null; this.tipEl.hidden = true; this.draw(); });
     canvas.addEventListener('click', (e) => { const i = this.indexAt(e); if (i !== null && this.o.onClick) this.o.onClick(i); });
+    registerChart(this);
   }
 
   Chart.prototype.indexAt = function (e) {
@@ -70,6 +102,7 @@
     const c = this.c;
     const dpr = window.devicePixelRatio || 1;
     const W = c.clientWidth, H = o.height;
+    if (!W) return;
     c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
     c.style.height = H + 'px';
     const g = c.getContext('2d');
@@ -93,7 +126,7 @@
     const ys = (v) => o.top + (1 - (v - lo) / (hi - lo)) * ph;
     this.ys = ys;
 
-    g.font = '11px "Segoe UI", Roboto, sans-serif';
+    g.font = COLORS.font;
     g.textBaseline = 'middle';
 
     // сетка и подписи оси Y
@@ -127,16 +160,16 @@
       if (h.label) {
         g.textAlign = 'left';
         const tw = g.measureText(h.label).width;
-        g.fillStyle = '#151a24d9';
+        g.fillStyle = COLORS.labelBg;
         g.fillRect(o.left + 4, y - 17, tw + 8, 15);
-        g.fillStyle = h.color.length > 7 ? h.color.slice(0, 7) : h.color;
+        g.fillStyle = h.color.startsWith('#') && h.color.length > 7 ? h.color.slice(0, 7) : h.color;
         g.fillText(h.label, o.left + 8, y - 9);
       }
     });
 
     // линии
     m.series.forEach((s) => {
-      g.strokeStyle = s.color; g.lineWidth = s.width || 1.6; g.setLineDash(s.dash || []);
+      g.strokeStyle = s.color; g.lineWidth = s.width || 1.65; g.setLineDash(s.dash || []);
       g.beginPath();
       let pen = false;
       for (let i = m.x0; i <= m.x1; i++) {
@@ -155,12 +188,12 @@
     });
 
     if (m.cursor !== undefined && m.cursor !== null && m.cursor >= m.x0 && m.cursor <= m.x1) {
-      g.strokeStyle = '#ffffff55'; g.lineWidth = 1;
+      g.strokeStyle = COLORS.cursor; g.lineWidth = 1;
       const x = Math.round(this.xs(m.cursor)) + 0.5;
       g.beginPath(); g.moveTo(x, o.top); g.lineTo(x, o.top + ph); g.stroke();
     }
     if (this.hover !== null && this.hover >= m.x0 && this.hover <= m.x1) {
-      g.strokeStyle = '#ffffff40'; g.lineWidth = 1;
+      g.strokeStyle = COLORS.hover; g.lineWidth = 1;
       const x = Math.round(this.xs(this.hover)) + 0.5;
       g.beginPath(); g.moveTo(x, o.top); g.lineTo(x, o.top + ph); g.stroke();
       m.series.forEach((s) => {
@@ -193,5 +226,9 @@
     return out;
   }
 
-  window.UI = { Chart, COLORS, fmt, sgn, MINUS };
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => syncThemeColors());
+  }
+
+  window.UI = { Chart, COLORS, PALETTES, currentTheme, syncThemeColors, registerChart, fmt, sgn, MINUS };
 })();

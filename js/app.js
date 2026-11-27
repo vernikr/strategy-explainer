@@ -92,7 +92,7 @@
     const d = data();
     const z = bt.z[i];
     return '<b>День ' + (i + 1) + '</b><br>Спред: ' + U.fmt(d.spread[i]) +
-      (bt.mean[i] !== null ? '<br>Среднее: ' + U.fmt(bt.mean[i]) + ' · σ: ' + U.fmt(bt.std[i]) + '<br>z-score: <b>' + U.fmt(z) + '</b>' : '<br><span style="color:#98a3b6">окно ещё не набралось</span>');
+      (bt.mean[i] !== null ? '<br>Среднее: ' + U.fmt(bt.mean[i]) + ' · σ: ' + U.fmt(bt.std[i]) + '<br>z-score: <b>' + U.fmt(z) + '</b>' : '<br><span style="color:var(--muted)">окно ещё не набралось</span>');
   }
 
   function tradeMarkers(bt, yOf, withExit) {
@@ -106,7 +106,9 @@
 
   function positionSpans(bt) {
     const spans = [];
-    bt.trades.forEach((t) => spans.push({ i0: t.entryIdx, i1: t.exitIdx, color: t.dir === 1 ? '#35d07f18' : '#ff6b6b18' }));
+    const upFill = U.currentTheme && U.currentTheme() === 'claude' ? 'rgba(107, 201, 120, 0.11)' : '#35d07f18';
+    const downFill = U.currentTheme && U.currentTheme() === 'claude' ? 'rgba(235, 98, 99, 0.11)' : '#ff6b6b18';
+    bt.trades.forEach((t) => spans.push({ i0: t.entryIdx, i1: t.exitIdx, color: t.dir === 1 ? upFill : downFill }));
     return spans;
   }
 

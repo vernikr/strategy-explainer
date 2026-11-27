@@ -22,6 +22,7 @@
     this.tipEl = document.createElement('div'); this.tipEl.className = 'tip'; this.tipEl.hidden = true; box.appendChild(this.tipEl);
     canvas.addEventListener('mousemove', (e) => this.onMove(e));
     canvas.addEventListener('mouseleave', () => { this.hover = null; this.tipEl.hidden = true; this.draw(); });
+    if (U.registerChart) U.registerChart(this);
   }
 
   Scatter.prototype.onMove = function (e) {
@@ -46,6 +47,7 @@
     const m = this.m, o = this.o, c = this.c;
     if (!m) return;
     const dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = o.height;
+    if (!W) return;
     c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.height = H + 'px';
     const g = c.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -63,7 +65,7 @@
     const px = (x) => o.left + ((x - x0) / (x1 - x0)) * pw, py = (y) => o.top + (1 - (y - y0) / (y1 - y0)) * ph;
     this.px = px; this.py = py;
 
-    g.font = '11px "Segoe UI", Roboto, sans-serif';
+    g.font = C.font || '11px "Segoe UI", Roboto, sans-serif';
     g.textBaseline = 'middle';
     g.strokeStyle = C.grid; g.fillStyle = C.axis; g.lineWidth = 1;
     g.textAlign = 'right';

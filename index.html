@@ -22,11 +22,21 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand">
-      <div class="logo">σ</div>
-      <div>
-        <div class="brand-title">Стратегии простыми словами</div>
-        <div class="brand-sub">Спред-арбитраж на срочном рынке</div>
+    <div class="brand-group">
+      <div class="brand">
+        <div class="logo">σ</div>
+        <div>
+          <div class="brand-title">Стратегии простыми словами</div>
+          <div class="brand-sub">Спред-арбитраж на срочном рынке</div>
+        </div>
+      </div>
+      <div id="theme-switch" class="theme-switch" role="group" aria-label="Тема оформления">
+        <button type="button" data-theme-val="claude" title="Тёмная тема в стиле чата Claude">
+          <span class="swatch claude" aria-hidden="true"></span>Claude
+        </button>
+        <button type="button" data-theme-val="classic" title="Исходная классическая тема">
+          <span class="swatch classic" aria-hidden="true"></span>Классика
+        </button>
       </div>
     </div>
     <nav id="strategies" class="strategies" aria-label="Стратегии"></nav>
