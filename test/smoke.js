@@ -38,7 +38,7 @@ if (!fs.existsSync(CHROME)) {
     return { dom: r.stdout || '', errs };
   };
   const onlyList = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const stratIds = onlyList || ['zscore', 'ewma', 'robust', 'hedge', 'coint', 'calendar', 'tactics', 'fx', 'baskets', 'moex', 'diag', 'bands', 'regime', 'valid'];
+  const stratIds = onlyList || ['zscore', 'ewma', 'robust', 'hedge', 'coint', 'calendar', 'tactics', 'fx', 'baskets', 'moex', 'diag', 'bands', 'regime', 'valid', 'book'];
   stratIds.forEach((id) => {
     const first = dump(id + '/1');
     const titles = [...first.dom.matchAll(/<button class="step[^"]*" data-i="\d+"><span class="num">\d+<\/span><span>([^<]*)<\/span>/g)].map((x) => x[1]);
