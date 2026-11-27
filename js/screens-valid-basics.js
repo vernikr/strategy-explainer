@@ -288,7 +288,7 @@
   });
 
   /* ---------- 4. Множественное тестирование: PSR, сдутый Шарп DSR и журнал N ---------- */
-  const s4 = { sr: 1.75, trials: 25, lenT: 360, kurt: 4.5 };
+  const s4 = { sr: 1.75, trials: 25, lenT: 360, exKurt: 1.5 };
 
   Z.push({
     id: 'psr-dsr',
@@ -298,7 +298,7 @@
       <h3>От сырого Sharpe к ${T('psr_metric', 'PSR')} и ${T('dsr_metric', 'DSR')}</h3>
       <p>Голый коэффициент Шарпа молчит о двух главных подвохах: насколько коротка история с тяжёлыми хвостами и сколько сотен кнопок вы перекрутили до того, как нашли «красивый график».</p>
       <ul>
-        <li><b>PSR (Probabilistic Sharpe Ratio):</b> проверяет одну стратегию — какова вероятность, что истинный Sharpe больше нуля с учётом длины ряда <code>T</code>, скошенности и толщины хвостов (эксцесса <code>γ₄</code>).</li>
+        <li><b>PSR (Probabilistic Sharpe Ratio):</b> проверяет одну стратегию — какова вероятность, что истинный Sharpe больше нуля с учётом длины ряда <code>T</code>, скошенности и толщины хвостов (избыточного эксцесса <code>κ = γ₄ − 3</code>, где у гауссова колокола <code>κ = 0</code>).</li>
         <li><b>Ожидаемый рекорд шума <code>SR₀(N)</code>:</b> чем больше независимых попыток <code>N</code> записано в <b>журнале экспериментов</b>, тем выше планка <code>SR₀(N)</code>, которую случайно пробьёт чистый шум.</li>
         <li><b>DSR (Deflated Sharpe Ratio — «сдутый Шарп»):</b> вероятность того, что ваш результат выше случайного рекорда <code>SR₀(N)</code>. В промоушн-гейте требуется <code>DSR ≥ 0,95</code>!</li>
       </ul>`,
@@ -335,9 +335,9 @@
         onInput: (v) => { s4.lenT = v; draw4(); }
       });
       HV.slider(el.querySelector('#sl4k'), {
-        label: 'Толщина хвостов доходности (эксцесс γ₄; норма = 3)', min: 3.0, max: 10.0, step: 0.5, value: s4.kurt,
-        fmt: (v) => 'γ₄ = ' + f(v, 1),
-        onInput: (v) => { s4.kurt = v; draw4(); }
+        label: 'Толщина хвостов доходности (избыточный эксцесс; 0 = гауссов штиль)', min: 0.0, max: 7.0, step: 0.5, value: s4.exKurt,
+        fmt: (v) => (v === 0 ? '0 (нормальный колокол, γ₄ = 3)' : '+' + f(v, 1) + ' (γ₄ = ' + f(3 + v, 1) + ')'),
+        onInput: (v) => { s4.exKurt = v; draw4(); }
       });
 
       let nAxis = [], dsrCurve = [];
@@ -346,14 +346,15 @@
       });
 
       function draw4() {
-        const psr1 = E.calcPSR(s4.sr, s4.lenT, -0.25, s4.kurt, 0);
-        const curDsr = E.calcDSR(s4.sr, s4.lenT, -0.25, s4.kurt, s4.trials, 0.55);
+        const fullKurt = 3 + s4.exKurt;
+        const psr1 = E.calcPSR(s4.sr, s4.lenT, -0.25, fullKurt, 0);
+        const curDsr = E.calcDSR(s4.sr, s4.lenT, -0.25, fullKurt, s4.trials, 0.55);
 
         nAxis = []; dsrCurve = [];
         for (let k = 1; k <= 60; k++) {
           const nVal = k === 1 ? 1 : k * 5;
           nAxis.push(nVal);
-          dsrCurve.push(E.calcDSR(s4.sr, s4.lenT, -0.25, s4.kurt, nVal, 0.55).dsr);
+          dsrCurve.push(E.calcDSR(s4.sr, s4.lenT, -0.25, fullKurt, nVal, 0.55).dsr);
         }
 
         const curIdx = Math.min(59, s4.trials <= 1 ? 0 : Math.max(1, Math.round(s4.trials / 5) - 1));

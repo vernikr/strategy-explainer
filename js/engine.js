@@ -4185,7 +4185,7 @@
     { id: 0, code: 'SBER / VTBR', cluster: 'Банки и индекс', driver: 'Банковский сектор и индексный риск-он', soloScore: 0.91, comp: [0.94, 0.90, 0.92, 0.89, 0.90], margin: 38, depth: 36, beta: 0.42 },
     { id: 1, code: 'SR / VB', cluster: 'Банки и индекс', driver: 'Фьючерсы банков (клон пары #1 на FORTS)', soloScore: 0.89, comp: [0.92, 0.88, 0.90, 0.87, 0.88], margin: 34, depth: 34, beta: 0.41 },
     { id: 2, code: 'SBER / SBERP', cluster: 'Банки и индекс', driver: 'Спред обычки и префа в банковский поток', soloScore: 0.86, comp: [0.90, 0.87, 0.85, 0.84, 0.84], margin: 32, depth: 30, beta: 0.96 },
-    { id: 3, code: 'MIX / RTS-рубл.', cluster: 'Банки и индекс', driver: 'Тяжёлые банковские фишки внутри индекса', soloScore: 0.84, comp: [0.88, 0.83, 0.84, 0.82, 0.83], margin: 46, depth: 28, beta: 0.63 },
+    { id: 3, code: 'TCSG / SBER', cluster: 'Банки и индекс', driver: 'Финтех и госбанк на общем ставковом цикле', soloScore: 0.84, comp: [0.88, 0.83, 0.84, 0.82, 0.83], margin: 46, depth: 28, beta: 0.63 },
     { id: 4, code: 'LKOH / ROSN', cluster: 'Нефть и экспорт', driver: 'Спред нефтяных мейджоров (демпфер и добыча)', soloScore: 0.79, comp: [0.82, 0.80, 0.78, 0.79, 0.76], margin: 42, depth: 26, beta: 0.74 },
     { id: 5, code: 'BR-ближ. / дальн.', cluster: 'Нефть и экспорт', driver: 'Календарный наклон кривой нефти Brent', soloScore: 0.75, comp: [0.78, 0.76, 0.74, 0.75, 0.72], margin: 36, depth: 22, beta: 1.00 },
     { id: 6, code: 'Si-ближ. / дальн.', cluster: 'Валюта и ставка', driver: 'Календарный базис рубль/доллар и ставка RUONIA', soloScore: 0.77, comp: [0.85, 0.78, 0.75, 0.76, 0.71], margin: 30, depth: 40, beta: 1.00 },
