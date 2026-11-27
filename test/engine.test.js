@@ -890,4 +890,67 @@ for (const sc of E.MOEX_SCENARIOS) {
   assert(agg.robust_pass.tAu > 200 && agg.robust_pass.rej === 0);
 }
 
+// 46. Размер позиции (дробный Келли, vol-targeting, вместимость, целые лоты) и субмодулярность отбора книги (#51)
+{
+  const kc = E.kellyCurve({ srEst: 1.25, volAnn: 0.25, edgeHaircut: 0.72, tailKurt: 3.0, kClones: 1, rho: 0 });
+  assert(Math.abs(kc.paperRetentionHalf - 0.75) < 1e-6);
+  assert(kc.growthAtHalf > 0.25 && kc.growthAtFull < 0);
+  const kcClones = E.kellyCurve({ srEst: 1.25, volAnn: 0.25, edgeHaircut: 0.72, tailKurt: 3.0, kClones: 4, rho: 0.85 });
+  assert(kcClones.optMTrue <= kc.optMTrue && kcClones.growthAtFull < -2.0);
+
+  const cap = E.capacityCurve({ grossEdgeRub: 960, fixedFeeRub: 180, impactCoeffRub: 410, depthLots: 24 });
+  assert(cap.safeCapQ > 0 && cap.safeCapQ <= cap.optQ && cap.optQ < cap.maxViableQ);
+
+  const ih = E.integerHedgeResiduals({ beta: 0.37, priceA: 32000, priceB: 32000, maxLotsA: 12 });
+  assert(!ih.naive1to1.passesGate && ih.bestPair.passesGate && ih.bestPair.residualPct < 0.02);
+
+  const szCalm = E.sizePosition({ capitalRub: 5000000, targetVolAnn: 0.06, spreadSigmaDayRub: 1400, depthLots: 40 });
+  const szStorm = E.sizePosition({ capitalRub: 5000000, targetVolAnn: 0.06, spreadSigmaDayRub: 4200, depthLots: 40 });
+  assert(szStorm.qFinal < szCalm.qFinal && szStorm.qFinal >= 1);
+
+  // Строгая проверка свойства субмодулярности (убывающей отдачи): F(A ∪ {e}) − F(A) ≥ F(B ∪ {e}) − F(B) для A ⊆ B
+  const univ = E.genBookUniverse(7, E.BOOK_SCENARIOS[0]);
+  const sub = E.greedySubmodularSelect(univ.pairs, { t0: 0, t1: univ.splitIdx, maxK: 4 });
+  const A = [0];
+  const B = [0, 4, 6];
+  for (let e = 0; e < 8; e++) {
+    if (B.indexOf(e) !== -1) continue;
+    const gainA = sub.evalSubmodularF(A.concat([e])) - sub.evalSubmodularF(A);
+    const gainB = sub.evalSubmodularF(B.concat([e])) - sub.evalSubmodularF(B);
+    assert(gainA >= gainB - 1e-9);
+  }
+  assert(sub.ratioToOpt >= sub.theoreticalBound && sub.greedyF > sub.soloTopF);
+  // В жадной корзине из 4 пар не должно быть дублей с ρ ≥ 0.60, тогда как в наивном Топ-4 их 6 рёбер!
+  const bmTop = E.bookMetrics(univ.pairs, sub.soloTopIds, null, { t0: 0, t1: univ.splitIdx });
+  const bmSub = E.bookMetrics(univ.pairs, sub.selectedIds, null, { t0: 0, t1: univ.splitIdx });
+  assert(bmTop.dupAlerts.length >= 4 && bmSub.dupAlerts.length === 0 && bmSub.effBets > bmTop.effBets * 1.8);
+}
+
+// 47. Сравнение 4 подходов к сборке и сайзингу книги (4 сценария × 11 историй)
+{
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  const agg = {};
+  E.BOOK_SCENARIOS.forEach((sc) => {
+    let tNv = 0, tFk = 0, tVo = 0, tSb = 0, srNv = 0, srSb = 0, ddNv = 0, ddSb = 0;
+    seeds.forEach((sd) => {
+      const u = E.genBookUniverse(sd, sc);
+      const r = E.backtestBookApproaches(u);
+      tNv += r.approaches.naive_top.total;
+      tFk += r.approaches.full_kelly_top.total;
+      tVo += r.approaches.vol_only_top.total;
+      tSb += r.approaches.submod_book.total;
+      srNv += r.approaches.naive_top.srAnn / seeds.length;
+      srSb += r.approaches.submod_book.srAnn / seeds.length;
+      ddNv += r.approaches.naive_top.maxDD / seeds.length;
+      ddSb += r.approaches.submod_book.maxDD / seeds.length;
+    });
+    agg[sc.id] = { tNv, tFk, tVo, tSb, srNv, srSb, ddNv, ddSb };
+    console.log('книга спредов, «' + sc.name + '»: топ-4 фикс ' + tNv.toFixed(0) + ', полный Келли ' + tFk.toFixed(0) + ', топ-4+vol ' + tVo.toFixed(0) + ', субмод. книга ' + tSb.toFixed(0) + ' (SR ' + srSb.toFixed(2) + ')');
+  });
+  assert(agg.clone_shock.tSb > 2500 && agg.clone_shock.tNv < -5000 && agg.clone_shock.tVo < 0);
+  assert(agg.vol_storm_kelly.tSb > 3000 && agg.vol_storm_kelly.tVo > 500 && agg.vol_storm_kelly.tFk < -10000);
+  assert(agg.thin_capacity.tSb > agg.thin_capacity.tNv && agg.thin_capacity.tFk < -10000);
+  assert(agg.balanced_year.srSb > agg.balanced_year.srNv + 1.2 && agg.balanced_year.ddSb < agg.balanced_year.ddNv * 0.65);
+}
+
 console.log('OK: все проверки пройдены');

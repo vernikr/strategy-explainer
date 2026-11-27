@@ -3968,7 +3968,685 @@
   }
 
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+
+  /* =========================================================================
+   * РАЗДЕЛ 15 (#51): РАЗМЕР ПОЗИЦИИ И СБОРКА ПОРТФЕЛЯ («КНИГИ») СПРЕДОВ
+   * Дробный Келли, vol-targeting, вместимость стакана и жадный субмодулярный отбор
+   * ========================================================================= */
+
+  // Кривая геометрического роста счёта по доле m ∈ [0 .. 2.2] от наивного сольного Келли (§4.10)
+  function kellyCurve(opts) {
+    const o = opts || {};
+    const srEst = Math.max(0.2, +o.srEst || 1.25);   // бумажный годовой Sharpe одного слота
+    const volAnn = Math.max(0.05, +o.volAnn || 0.25); // годовая волатильность при единичном плече
+    const edgeHaircut = o.edgeHaircut !== undefined ? Math.max(0.15, Math.min(1.1, +o.edgeHaircut)) : 0.72;
+    const tailKurt = o.tailKurt !== undefined ? Math.max(0, +o.tailKurt) : 3.0; // избыточный эксцесс хвостов
+    const kClones = Math.max(1, Math.round(+o.kClones || 1));
+    const rho = o.rho !== undefined ? Math.max(0, Math.min(0.98, +o.rho)) : 0;
+
+    // Чтобы масштаб счёта оставался реалистичным, нормируем бюджет слота на 1/kClones при независимых ставках,
+    // но если трейдер ставит m × (f_naive / √k) на k коррелированных клонов, корреляция раздувает дисперсию в (1 + (k-1)ρ) раз!
+    const muEst = srEst * volAnn;
+    const var1 = volAnn * volAnn;
+    const fNaive = (muEst / var1) / Math.sqrt(kClones);
+    const corrDiv = 1 + (kClones - 1) * rho;
+    const fCorrAdj = (muEst / var1) / (kClones * (1 + (kClones - 1) * rho) / Math.sqrt(kClones));
+
+    const muTrue = muEst * edgeHaircut;
+    const gridM = [];
+    const growthNaive = [];
+    const growthTrue = [];
+    const dd95 = [];
+
+    let bestTrue = -Infinity, optMTrue = 0, cliffM = 2.25;
+    for (let i = 0; i <= 44; i++) {
+      const m = +(i * 0.05).toFixed(2);
+      const levSlot = m * fNaive;
+
+      // Бумажная парабола (идеальная нормальность, ρ = 0, нулевая ошибка оценки μ): пик строго в m = 1.0!
+      const gPaper = kClones * muEst * levSlot - 0.5 * kClones * var1 * levSlot * levSlot;
+
+      // Реальный геометрический темп роста счёта с учётом усушки края, корреляции ρ и толстых хвостов
+      const bookMu = kClones * muTrue * levSlot;
+      const bookVar = kClones * var1 * levSlot * levSlot * corrDiv;
+      const tailPen = (tailKurt / 24) * bookVar * bookVar * 1.35;
+      const gReal = bookMu - 0.5 * bookVar - tailPen;
+
+      const bookVol = Math.sqrt(Math.max(0, bookVar));
+      const estDD = Math.min(0.99, 1 - Math.exp(-1.55 * bookVol * (1 + 0.06 * tailKurt)));
+
+      gridM.push(m);
+      growthNaive.push(gPaper);
+      growthTrue.push(gReal);
+      dd95.push(estDD);
+
+      if (gReal > bestTrue) { bestTrue = gReal; optMTrue = m; }
+    }
+    for (let i = 1; i < gridM.length; i++) {
+      if (growthTrue[i] < 0 && cliffM > 2.2) cliffM = gridM[i];
+    }
+    const paperRetentionHalf = growthNaive[20] > 0 ? growthNaive[10] / growthNaive[20] : 0.75; // ровно 0.75!
+    return {
+      gridM,
+      growthNaive,
+      growthTrue,
+      dd95,
+      fNaive,
+      fCorrAdj,
+      corrFactor: corrDiv,
+      optMTrue,
+      bestTrueGrowth: bestTrue,
+      growthAtQuarter: growthTrue[5],
+      growthAtHalf: growthTrue[10],
+      growthAtFull: growthTrue[20],
+      paperRetentionHalf,
+      cliffM
+    };
+  }
+
+  // Кривая вместимости стакана (capacity): как рост лотов съедает край из-за проскальзывания (§6.5)
+  function capacityCurve(opts) {
+    const o = opts || {};
+    const grossEdgeRub = Math.max(50, +o.grossEdgeRub || 960);     // валовый край на 1 связку (₽)
+    const fixedFeeRub = Math.max(10, +o.fixedFeeRub || 180);       // биржа + клиринг + брокер + полуспред топ-уровня (₽)
+    const impactCoeffRub = Math.max(20, +o.impactCoeffRub || 410); // добавка проскальзывания при объёме = depthLots (₽)
+    const depthLots = Math.max(2, +o.depthLots || 24);             // видимая глубина лучших уровней стакана (связок)
+    const maxQ = Math.max(20, Math.round(+o.maxQ || 100));
+
+    const qs = [], netPerLot = [], netTotal = [], slipShare = [];
+    let bestTotal = 0, optQ = 0, maxViableQ = 0, safeCapQ = 0;
+
+    for (let q = 1; q <= maxQ; q++) {
+      const impact = impactCoeffRub * Math.pow(q / depthLots, 0.80);
+      const unitCost = fixedFeeRub + impact;
+      const unitNet = grossEdgeRub - unitCost;
+      const tot = q * unitNet;
+      const share = unitCost / grossEdgeRub;
+
+      qs.push(q);
+      netPerLot.push(unitNet);
+      netTotal.push(tot);
+      slipShare.push(share);
+
+      if (tot > bestTotal) { bestTotal = tot; optQ = q; }
+      if (unitNet > 0) maxViableQ = q;
+      if (share <= 0.55) safeCapQ = q;
+    }
+    if (safeCapQ === 0 && optQ > 0) safeCapQ = Math.max(1, Math.floor(optQ * 0.75));
+    return {
+      qs, netPerLot, netTotal, slipShare,
+      optQ, bestTotalRub: bestTotal, maxViableQ, safeCapQ, depthLots
+    };
+  }
+
+  // Округление до целых контрактов и остаточная экспозиция хеджа (§6.5 и гейт 4 из §7.1)
+  function integerHedgeResiduals(opts) {
+    const o = opts || {};
+    const beta = Math.max(0.05, +o.beta || 0.37);
+    const priceA = Math.max(100, +o.priceA || 32000);
+    const priceB = Math.max(100, +o.priceB || 32000);
+    const maxLotsA = Math.max(1, Math.min(60, Math.round(+o.maxLotsA || 16)));
+    const maxResPct = o.maxResPct !== undefined ? +o.maxResPct : 0.08;
+
+    const candidates = [];
+    let bestPair = null;
+    for (let nA = 1; nA <= maxLotsA; nA++) {
+      const idealNotionalB = beta * nA * priceA;
+      const nB = Math.max(1, Math.round(idealNotionalB / priceB));
+      const actualNotionalA = nA * priceA;
+      const actualNotionalB = nB * priceB;
+      const residualRub = Math.abs(actualNotionalB - idealNotionalB);
+      const residualPct = residualRub / actualNotionalA;
+      const row = {
+        lotsA: nA,
+        lotsB: nB,
+        ratioLots: nB / nA,
+        notionalRub: actualNotionalA + actualNotionalB,
+        residualRub,
+        residualPct,
+        passesGate: residualPct <= maxResPct
+      };
+      candidates.push(row);
+      if (!bestPair || (row.passesGate && !bestPair.passesGate) ||
+          (row.passesGate === bestPair.passesGate && row.residualPct < bestPair.residualPct - 1e-6)) {
+        bestPair = row;
+      }
+    }
+    return {
+      beta,
+      maxResPct,
+      naive1to1: candidates[0],
+      bestPair,
+      candidates
+    };
+  }
+
+  // Единый конвейер расчёта размера позиции из 4 ограничителей (§4.10 + §6.5)
+  function sizePosition(opts) {
+    const o = opts || {};
+    const capitalRub = Math.max(100000, +o.capitalRub || 5000000);
+    const targetVolAnn = Math.max(0.01, +o.targetVolAnn || 0.06);
+    const spreadSigmaDayRub = Math.max(50, +o.spreadSigmaDayRub || 2200);
+    const kellyFrac = o.kellyFrac !== undefined ? Math.max(0.05, +o.kellyFrac) : 0.35;
+    const srEst = Math.max(0.1, +o.srEst || 1.7);
+    const kActive = Math.max(1, Math.round(+o.kActive || 4));
+    const avgRho = o.avgRho !== undefined ? Math.max(0, Math.min(0.95, +o.avgRho)) : 0.15;
+    const marginPerBundleRub = Math.max(1000, +o.marginPerBundleRub || 45000);
+    const maxMarginShare = o.maxMarginShare !== undefined ? Math.max(0.05, +o.maxMarginShare) : 0.20;
+
+    const dailyVolBudgetRub = (capitalRub * targetVolAnn) / Math.sqrt(252);
+    const qVol = dailyVolBudgetRub / spreadSigmaDayRub;
+
+    const corrDiv = 1 + (kActive - 1) * avgRho;
+    const fullKellyBundles = ((srEst / Math.sqrt(252)) * capitalRub) / (spreadSigmaDayRub * corrDiv);
+    const qKelly = kellyFrac * fullKellyBundles;
+
+    const qMargin = (capitalRub * maxMarginShare) / marginPerBundleRub;
+
+    const cap = capacityCurve({
+      grossEdgeRub: o.grossEdgeRub || 960,
+      fixedFeeRub: o.fixedFeeRub || 180,
+      impactCoeffRub: o.impactCoeffRub || 410,
+      depthLots: o.depthLots || 24,
+      maxQ: 120
+    });
+    const qCap = cap.safeCapQ;
+
+    const limits = [
+      { id: 'vol', label: 'Vol-targeting (бюджет риска)', q: qVol },
+      { id: 'kelly', label: 'Дробный Келли (с корр. поправкой)', q: qKelly },
+      { id: 'margin', label: 'Лимит ГО на связку', q: qMargin },
+      { id: 'capacity', label: 'Вместимость стакана (capacity)', q: qCap }
+    ];
+    let minLim = limits[0];
+    for (let i = 1; i < limits.length; i++) {
+      if (limits[i].q < minLim.q) minLim = limits[i];
+    }
+    const qFinal = Math.max(0, Math.floor(minLim.q));
+
+    return {
+      qFinal,
+      bindingId: minLim.id,
+      bindingLabel: minLim.label,
+      qVol,
+      qKelly,
+      qMargin,
+      qCap,
+      corrDiv,
+      dailyVolBudgetRub,
+      realizedDailyRiskRub: qFinal * spreadSigmaDayRub,
+      marginUsedRub: qFinal * marginPerBundleRub,
+      capacity: cap
+    };
+  }
+
+  // 8 реалистичных кандидатов в книгу спредов MOEX из 4 экономических кластеров
+  const BOOK_PAIR_SPECS = [
+    { id: 0, code: 'SBER / VTBR', cluster: 'Банки и индекс', driver: 'Банковский сектор и индексный риск-он', soloScore: 0.91, comp: [0.94, 0.90, 0.92, 0.89, 0.90], margin: 38, depth: 36, beta: 0.42 },
+    { id: 1, code: 'SR / VB', cluster: 'Банки и индекс', driver: 'Фьючерсы банков (клон пары #1 на FORTS)', soloScore: 0.89, comp: [0.92, 0.88, 0.90, 0.87, 0.88], margin: 34, depth: 34, beta: 0.41 },
+    { id: 2, code: 'SBER / SBERP', cluster: 'Банки и индекс', driver: 'Спред обычки и префа в банковский поток', soloScore: 0.86, comp: [0.90, 0.87, 0.85, 0.84, 0.84], margin: 32, depth: 30, beta: 0.96 },
+    { id: 3, code: 'MIX / RTS-рубл.', cluster: 'Банки и индекс', driver: 'Тяжёлые банковские фишки внутри индекса', soloScore: 0.84, comp: [0.88, 0.83, 0.84, 0.82, 0.83], margin: 46, depth: 28, beta: 0.63 },
+    { id: 4, code: 'LKOH / ROSN', cluster: 'Нефть и экспорт', driver: 'Спред нефтяных мейджоров (демпфер и добыча)', soloScore: 0.79, comp: [0.82, 0.80, 0.78, 0.79, 0.76], margin: 42, depth: 26, beta: 0.74 },
+    { id: 5, code: 'BR-ближ. / дальн.', cluster: 'Нефть и экспорт', driver: 'Календарный наклон кривой нефти Brent', soloScore: 0.75, comp: [0.78, 0.76, 0.74, 0.75, 0.72], margin: 36, depth: 22, beta: 1.00 },
+    { id: 6, code: 'Si-ближ. / дальн.', cluster: 'Валюта и ставка', driver: 'Календарный базис рубль/доллар и ставка RUONIA', soloScore: 0.77, comp: [0.85, 0.78, 0.75, 0.76, 0.71], margin: 30, depth: 40, beta: 1.00 },
+    { id: 7, code: 'GD / SV', cluster: 'Металлы', driver: 'Отношение золота к серебру (защитный фактор)', soloScore: 0.73, comp: [0.74, 0.75, 0.72, 0.74, 0.70], margin: 40, depth: 18, beta: 0.58 }
+  ];
+
+  const BOOK_SCENARIOS = [
+    {
+      id: 'clone_shock',
+      name: 'Скрытая концентрация: удар по общему фактору топ-пар',
+      note: 'Четыре лидера сольного рейтинга (0,84–0,91) относятся к одному банковско-индексному кластеру (ρ ≈ 0,85) и во второй половине синхронно уходят в просадку, тогда как нефть, валюта и металлы продолжают спокойно зарабатывать.'
+    },
+    {
+      id: 'vol_storm_kelly',
+      name: 'Взрыв волатильности и обрыв полного Келли',
+      note: 'Во второй половине истории дневной разброс спредов утраивается на 6 недель: полный 1× Келли без учёта корреляции проваливается на хвостовых ударах, а связка vol-targeting + 0,35× Kelly сжимает объём и сберегает счёт.'
+    },
+    {
+      id: 'thin_capacity',
+      name: 'Ловушка тонкого стакана при росте объёма сделки',
+      note: 'Видимая глубина стакана сжата: агрессивный и даже фиксированный сайзинг без потолка capacity двигает цену против себя и отдаёт львиную долю края в проскальзывание.'
+    },
+    {
+      id: 'balanced_year',
+      name: 'Спокойный разнородный год четырёх секторов',
+      note: 'Контрольная проверка без катастроф: при одинаковом бюджете риска книги субмодулярный отбор без дублей превосходит корзину клонов и по прибыли на единицу риска (Sharpe), и по хвостовой потере CVaR 95%.'
+    }
+  ];
+
+  function genBookUniverse(seed, scenario) {
+    const sc = scenario || BOOK_SCENARIOS[0];
+    const rand = mulberry32((seed * 131071 + sc.id.length * 8191) >>> 0);
+    const nNorm = () => {
+      const u1 = Math.max(1e-9, rand()), u2 = rand();
+      return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    };
+    const T = 240, splitIdx = 120;
+
+    const facLoad = [
+      [0.93, 0.05, 0.04, 0.00],
+      [0.91, 0.06, 0.05, 0.00],
+      [0.88, 0.04, 0.03, 0.02],
+      [0.85, 0.14, 0.08, 0.02],
+      [0.07, 0.86, 0.06, 0.04],
+      [0.05, 0.62, 0.05, 0.06],
+      [0.05, 0.06, 0.90, 0.04],
+      [0.02, 0.05, 0.06, 0.91]
+    ];
+
+    const pairs = BOOK_PAIR_SPECS.map((sp) => ({
+      id: sp.id,
+      code: sp.code,
+      cluster: sp.cluster,
+      driver: sp.driver,
+      soloScore: sp.soloScore,
+      comp: sp.comp.slice(),
+      margin: sp.margin,
+      depth: sc.id === 'thin_capacity' ? Math.max(4, Math.round(sp.depth * 0.20)) : sp.depth,
+      beta: sp.beta,
+      unitPnl: new Array(T).fill(0),
+      sigma: new Array(T).fill(1.0)
+    }));
+
+    for (let t = 0; t < T; t++) {
+      const isOOS = t >= splitIdx;
+      const inStorm = sc.id === 'vol_storm_kelly' && t >= 145 && t <= 198;
+      const inBankShock = sc.id === 'clone_shock' && t >= 140 && t <= 195;
+
+      const stormMult = inStorm ? 3.4 : 1.0;
+      const f0 = nNorm() * stormMult + (inBankShock ? -0.68 : (!isOOS ? 0.24 : (inStorm ? -0.14 : 0.18)));
+      const f1 = nNorm() * (inStorm ? 2.3 : 1.0) + 0.20;
+      const f2 = nNorm() * (inStorm ? 2.0 : 1.0) + 0.19;
+      const f3 = nNorm() * (inStorm ? 2.1 : 1.0) + 0.18;
+
+      for (let i = 0; i < 8; i++) {
+        const ld = facLoad[i];
+        const idioScale = Math.sqrt(Math.max(0.08, 1 - (ld[0] * ld[0] + ld[1] * ld[1] + ld[2] * ld[2] + ld[3] * ld[3]))) * stormMult;
+        const baseEdge = (!isOOS && i < 4) ? 0.05 : 0.02;
+        const shockTail = (inStorm && (t === 156 || t === 168 || t === 180 || t === 191)) ? -2.9 * (i < 4 ? 1.35 : 0.65) : 0;
+        pairs[i].unitPnl[t] = baseEdge + ld[0] * f0 + ld[1] * f1 + ld[2] * f2 + ld[3] * f3 + idioScale * nNorm() + shockTail;
+      }
+    }
+
+    for (let i = 0; i < 8; i++) {
+      for (let t = 0; t < T; t++) {
+        const a = Math.max(0, t - 20), b = Math.max(1, t);
+        let s2 = 0, cnt = 0;
+        for (let k = a; k < b; k++) { s2 += pairs[i].unitPnl[k] * pairs[i].unitPnl[k]; cnt++; }
+        pairs[i].sigma[t] = cnt >= 5 ? Math.max(0.45, Math.sqrt(s2 / cnt)) : 1.05;
+      }
+      const calSt = returnStats(pairs[i].unitPnl.slice(0, splitIdx));
+      pairs[i].calSharpe = calSt.srAnn;
+      pairs[i].calVolDay = Math.max(0.45, calSt.std);
+    }
+
+    return { scenario: sc, seed, T, splitIdx, capital: 2000, pairs }; // капитал книги 2000 тыс. ₽ = 2,0 млн ₽
+  }
+
+  function pairCorrGraph(pairs, opts) {
+    const o = opts || {};
+    const t0 = o.t0 || 0;
+    const t1 = o.t1 || pairs[0].unitPnl.length;
+    const thr = o.threshold !== undefined ? +o.threshold : 0.60;
+    const n = pairs.length;
+
+    const means = new Array(n).fill(0);
+    const sds = new Array(n).fill(0);
+    const len = Math.max(2, t1 - t0);
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      for (let t = t0; t < t1; t++) s += pairs[i].unitPnl[t];
+      means[i] = s / len;
+      let v = 0;
+      for (let t = t0; t < t1; t++) { const d = pairs[i].unitPnl[t] - means[i]; v += d * d; }
+      sds[i] = Math.sqrt(v / Math.max(1, len - 1)) || 1e-9;
+    }
+
+    const corr = Array.from({ length: n }, () => new Array(n).fill(0));
+    const edges = [];
+    for (let i = 0; i < n; i++) {
+      corr[i][i] = 1;
+      for (let j = i + 1; j < n; j++) {
+        let cov = 0;
+        for (let t = t0; t < t1; t++) cov += (pairs[i].unitPnl[t] - means[i]) * (pairs[j].unitPnl[t] - means[j]);
+        const r = Math.max(-1, Math.min(1, (cov / Math.max(1, len - 1)) / (sds[i] * sds[j])));
+        corr[i][j] = r;
+        corr[j][i] = r;
+        if (r >= thr) edges.push({ a: i, b: j, codeA: pairs[i].code, codeB: pairs[j].code, r });
+      }
+    }
+    edges.sort((x, y) => y.r - x.r);
+    return { corr, edges, threshold: thr };
+  }
+
+  function bookMetrics(pairs, selectedIds, weights, opts) {
+    const o = opts || {};
+    const t0 = o.t0 || 0;
+    const t1 = o.t1 || pairs[0].unitPnl.length;
+    const dupThr = o.dupThreshold !== undefined ? +o.dupThreshold : 0.60;
+    const len = Math.max(1, t1 - t0);
+
+    if (!selectedIds || !selectedIds.length) {
+      return {
+        selectedIds: [], pnl: new Array(len).fill(0), equity: new Array(len).fill(0),
+        total: 0, srAnn: 0, maxDD: 0, cvar95: 0, divRatio: 1, effBets: 0,
+        riskShares: [], dupAlerts: [], avgCorr: 0, marginUsed: 0
+      };
+    }
+
+    const k = selectedIds.length;
+    const w = weights && weights.length === k ? weights.slice() : new Array(k).fill(1);
+    const graph = o.corrMatrix ? { corr: o.corrMatrix } : pairCorrGraph(pairs, { t0, t1, threshold: dupThr });
+
+    const pnl = new Array(len).fill(0);
+    const equity = new Array(len).fill(0);
+    let acc = 0;
+    for (let idx = 0; idx < len; idx++) {
+      const t = t0 + idx;
+      let day = 0;
+      for (let m = 0; m < k; m++) {
+        const p = pairs[selectedIds[m]];
+        day += w[m] * p.unitPnl[t];
+      }
+      pnl[idx] = day;
+      acc += day;
+      equity[idx] = acc;
+    }
+
+    const st = returnStats(pnl);
+    const sorted = pnl.slice().sort((a, b) => a - b);
+    const tailCount = Math.max(1, Math.ceil(len * 0.05));
+    let tailSum = 0;
+    for (let i = 0; i < tailCount; i++) tailSum += sorted[i];
+    const cvar95 = Math.max(0, -(tailSum / tailCount));
+
+    const posSds = new Array(k).fill(0);
+    for (let m = 0; m < k; m++) {
+      const p = pairs[selectedIds[m]];
+      const sub = p.unitPnl.slice(t0, t1);
+      posSds[m] = Math.abs(w[m]) * Math.max(1e-6, returnStats(sub).std);
+    }
+    const weightedSumVol = posSds.reduce((s, x) => s + x, 0);
+    const covW = new Array(k).fill(0);
+    let portVar = 0;
+    for (let a = 0; a < k; a++) {
+      let c = 0;
+      for (let b = 0; b < k; b++) {
+        const r = graph.corr[selectedIds[a]][selectedIds[b]];
+        c += posSds[a] * posSds[b] * r;
+      }
+      covW[a] = c;
+      portVar += c;
+    }
+    const portSd = Math.sqrt(Math.max(1e-9, portVar));
+    const divRatio = portSd > 1e-8 ? weightedSumVol / portSd : 1;
+    const riskShares = portVar > 1e-9 ? covW.map((c) => Math.max(0, c / portVar)) : new Array(k).fill(1 / k);
+
+    const dupAlerts = [];
+    let corrSum = 0, corrPairs = 0;
+    for (let a = 0; a < k; a++) {
+      for (let b = a + 1; b < k; b++) {
+        const r = graph.corr[selectedIds[a]][selectedIds[b]];
+        corrSum += r;
+        corrPairs++;
+        if (r >= dupThr) {
+          dupAlerts.push({
+            a: selectedIds[a], b: selectedIds[b],
+            codeA: pairs[selectedIds[a]].code, codeB: pairs[selectedIds[b]].code, r
+          });
+        }
+      }
+    }
+    const avgCorr = corrPairs > 0 ? corrSum / corrPairs : 0;
+    const effBets = k / (1 + (k - 1) * Math.max(0, avgCorr));
+    let marginUsed = 0;
+    for (let m = 0; m < k; m++) marginUsed += Math.abs(w[m]) * pairs[selectedIds[m]].margin;
+
+    return {
+      selectedIds: selectedIds.slice(),
+      weights: w,
+      pnl,
+      equity,
+      total: st.total,
+      srAnn: st.srAnn,
+      maxDD: st.maxDD,
+      cvar95,
+      divRatio,
+      effBets,
+      riskShares,
+      dupAlerts,
+      avgCorr,
+      marginUsed
+    };
+  }
+
+  function greedySubmodularSelect(pairs, opts) {
+    const o = opts || {};
+    const t0 = o.t0 || 0;
+    const t1 = o.t1 !== undefined ? o.t1 : 120;
+    const maxK = Math.max(1, Math.min(pairs.length, Math.round(+o.maxK || 4)));
+    const minMarginalGain = o.minMarginalGain !== undefined ? +o.minMarginalGain : 0.045;
+    const n = pairs.length;
+    const graph = pairCorrGraph(pairs, { t0, t1, threshold: 0.60 });
+
+    const qualities = pairs.map((p) => {
+      const st = returnStats(p.unitPnl.slice(t0, t1));
+      const srBoost = Math.max(0.55, Math.min(1.25, 0.70 + 0.16 * st.srAnn));
+      return p.soloScore * srBoost;
+    });
+
+    function evalSubmodularF(subset) {
+      if (!subset.length) return 0;
+      let sum = 0;
+      for (let j = 0; j < n; j++) {
+        let bestCover = 0;
+        for (let m = 0; m < subset.length; m++) {
+          const i = subset[m];
+          const sim = i === j ? 1 : Math.max(0, graph.corr[i][j]);
+          const val = qualities[i] * sim;
+          if (val > bestCover) bestCover = val;
+        }
+        sum += bestCover;
+      }
+      return sum / n;
+    }
+
+    const selected = [];
+    const steps = [];
+    const skippedClones = [];
+    let curF = 0;
+
+    for (let step = 1; step <= maxK; step++) {
+      let bestId = -1, bestGain = -1;
+      const stepTable = [];
+      for (let cand = 0; cand < n; cand++) {
+        if (selected.indexOf(cand) !== -1) continue;
+        const nextF = evalSubmodularF(selected.concat([cand]));
+        const gain = nextF - curF;
+        let maxR = 0, cloneOf = null;
+        for (let m = 0; m < selected.length; m++) {
+          const r = graph.corr[cand][selected[m]];
+          if (r > maxR) { maxR = r; cloneOf = pairs[selected[m]].code; }
+        }
+        stepTable.push({ id: cand, code: pairs[cand].code, soloScore: pairs[cand].soloScore, gain, maxR, cloneOf });
+        if (gain > bestGain) { bestGain = gain; bestId = cand; }
+      }
+      stepTable.sort((a, b) => b.gain - a.gain);
+
+      if (bestId === -1 || bestGain < minMarginalGain) {
+        stepTable.forEach((row) => {
+          if (row.maxR >= 0.60) skippedClones.push(row);
+        });
+        break;
+      }
+
+      stepTable.forEach((row) => {
+        if (row.id !== bestId && row.soloScore > pairs[bestId].soloScore && row.maxR >= 0.60) {
+          if (!skippedClones.some((x) => x.id === row.id)) skippedClones.push(row);
+        }
+      });
+
+      selected.push(bestId);
+      curF += bestGain;
+      const bm = bookMetrics(pairs, selected, null, { t0, t1, corrMatrix: graph.corr });
+      steps.push({
+        step,
+        pickedId: bestId,
+        pickedCode: pairs[bestId].code,
+        cluster: pairs[bestId].cluster,
+        soloScore: pairs[bestId].soloScore,
+        marginalGain: bestGain,
+        totalF: curF,
+        bookSharpe: bm.srAnn,
+        bookCVaR: bm.cvar95,
+        effBets: bm.effBets,
+        candidatesRanked: stepTable
+      });
+    }
+
+    const kActual = selected.length;
+    let exactBestF = 0, exactBestSet = [];
+    function searchComb(start, chosen) {
+      if (chosen.length === kActual) {
+        const val = evalSubmodularF(chosen);
+        if (val > exactBestF) { exactBestF = val; exactBestSet = chosen.slice(); }
+        return;
+      }
+      for (let i = start; i <= n - (kActual - chosen.length); i++) {
+        chosen.push(i);
+        searchComb(i + 1, chosen);
+        chosen.pop();
+      }
+    }
+    if (kActual > 0) searchComb(0, []);
+
+    const soloTopIds = pairs.slice().sort((a, b) => b.soloScore - a.soloScore).slice(0, kActual || maxK).map((p) => p.id);
+    const soloTopF = evalSubmodularF(soloTopIds);
+
+    return {
+      selectedIds: selected,
+      soloTopIds,
+      steps,
+      skippedClones,
+      greedyF: curF,
+      soloTopF,
+      exactBestF,
+      exactBestSet,
+      ratioToOpt: exactBestF > 0 ? curF / exactBestF : 1,
+      theoreticalBound: 1 - 1 / Math.E,
+      evalSubmodularF,
+      corrMatrix: graph.corr,
+      edges: graph.edges
+    };
+  }
+
+  // Честное сравнение 4 подходов к сборке и сайзингу книги на живом тесте [splitIdx .. T-1]
+  // Все подходы работают от единого дневного бюджета риска книги (~22 тыс. ₽ СКО в день на счёте 2 млн ₽):
+  //  - naive_top: Топ-4 по сольному скору + фиксированные 9 связок на каждый слот (без vol-target и капа стакана);
+  //  - full_kelly_top: Топ-4 + наивный 1× сольный Келли (раздувает объём в ~3 раза без поправки на ρ и глубину стакана);
+  //  - vol_only_top: Топ-4 + грамотный vol-target, 0,35× Kelly и кап стакана, но без очистки книги от клонов;
+  //  - submod_book: Жадный субмодулярный отбор без дублей + vol-target + корр.-скорректированный 0,35× Kelly + кап стакана.
+  function backtestBookApproaches(univ) {
+    const { pairs, splitIdx, T, capital } = univ;
+    const sub = greedySubmodularSelect(pairs, { t0: 0, t1: splitIdx, maxK: 4 });
+    const topIds = sub.soloTopIds;
+    const divIds = sub.selectedIds;
+
+    function avgIntraCorr(ids) {
+      if (ids.length <= 1) return 0;
+      let s = 0, cnt = 0;
+      for (let a = 0; a < ids.length; a++) {
+        for (let b = a + 1; b < ids.length; b++) { s += Math.max(0, sub.corrMatrix[ids[a]][ids[b]]); cnt++; }
+      }
+      return cnt > 0 ? s / cnt : 0;
+    }
+
+    function simBook(ids, mode) {
+      const oosLen = T - splitIdx;
+      const pnl = new Array(oosLen).fill(0);
+      const equity = new Array(oosLen).fill(0);
+      const avgLots = new Array(ids.length).fill(0);
+      const avgRho = avgIntraCorr(ids);
+      const bookRiskTargetDay = 21.0; // тыс. ₽ целевого дневного СКО всей книги (≈ 16,7% годовой волатильности на 2 млн ₽)
+      let acc = 0, slipPaid = 0;
+
+      for (let idx = 0; idx < oosLen; idx++) {
+        const t = splitIdx + idx;
+        let daySum = 0;
+        for (let m = 0; m < ids.length; m++) {
+          const p = pairs[ids[m]];
+          const sig = p.sigma[t];
+          let q = 0;
+          if (mode === 'naive_top') {
+            q = 9;
+          } else if (mode === 'full_kelly_top') {
+            // 1.0× сольный Келли без поправки на корреляцию соседей и без капа вместимости, но с вынужденным сжатием при просадке маржи
+            const srCal = Math.max(0.9, p.calSharpe);
+            const eqScale = Math.max(0.25, (capital + acc) / capital);
+            const rawKelly = (((srCal / Math.sqrt(252)) * 185) / Math.max(0.55, p.calVolDay)) * eqScale;
+            q = Math.max(1, Math.min(42, Math.round(rawKelly)));
+          } else {
+            // Единый бюджет риска книги делится с учётом корреляции слотов √(k · (1 + (k-1)ρ)):
+            // 4 независимых слота (ρ≈0.08) получают по ~9,5 связок в штиль, а 4 клона (ρ≈0.85) — по ~5,6 связок, чтобы не пробить риск-бюджет книги!
+            const slotRiskBudget = bookRiskTargetDay / Math.sqrt(ids.length * (1 + (ids.length - 1) * avgRho));
+            const qVol = slotRiskBudget / sig;
+            const corrDiv = 1 + (ids.length - 1) * avgRho;
+            const qKelly = 0.38 * (((Math.max(1.0, p.calSharpe) / Math.sqrt(252)) * 520) / (sig * corrDiv));
+            const qMargin = (capital * 0.24) / p.margin;
+            const qCap = Math.max(3, Math.floor(p.depth * 0.50));
+            q = Math.max(1, Math.floor(Math.min(qVol, qKelly, qMargin, qCap)));
+          }
+          avgLots[m] += q / oosLen;
+          // Штраф за проедание глубины стакана (market impact из §6.5)
+          const ratioD = q / Math.max(4, p.depth);
+          const impactPenalty = ratioD > 0.55
+            ? 0.145 * q * Math.pow(ratioD - 0.35, 1.35)
+            : 0.014 * q * Math.pow(ratioD, 0.75);
+          slipPaid += impactPenalty;
+          daySum += q * p.unitPnl[t] - impactPenalty;
+        }
+        pnl[idx] = daySum;
+        acc += daySum;
+        equity[idx] = acc;
+      }
+      const st = returnStats(pnl);
+      const sorted = pnl.slice().sort((a, b) => a - b);
+      const tailN = Math.max(1, Math.ceil(oosLen * 0.05));
+      let tailS = 0;
+      for (let i = 0; i < tailN; i++) tailS += sorted[i];
+      const cvar95 = Math.max(0, -(tailS / tailN));
+      const bm = bookMetrics(pairs, ids, avgLots, { t0: splitIdx, t1: T, corrMatrix: sub.corrMatrix });
+      return {
+        ids,
+        codes: ids.map((id) => pairs[id].code),
+        avgLots,
+        pnl,
+        equity,
+        total: st.total,
+        srAnn: st.srAnn,
+        maxDD: st.maxDD,
+        cvar95,
+        slipPaid,
+        effBets: bm.effBets,
+        divRatio: bm.divRatio,
+        dupAlerts: bm.dupAlerts
+      };
+    }
+
+    return {
+      submod: sub,
+      approaches: {
+        naive_top: simBook(topIds, 'naive_top'),
+        full_kelly_top: simBook(topIds, 'full_kelly_top'),
+        vol_only_top: simBook(topIds, 'vol_only_top'),
+        submod_book: simBook(divIds, 'submod_book')
+      }
+    };
+  }
+
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
