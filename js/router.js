@@ -21,8 +21,19 @@
   function render() {
     if (window.__stepTimer) { clearInterval(window.__stepTimer); window.__stepTimer = null; }
     const s = strategies().find((x) => x.id === stratId);
+    const tiers = window.STRATEGY_TIERS || [];
+    const tierOf = (t) => tiers.find((g) => g.id === t);
     const nav = document.getElementById('strategies');
-    nav.innerHTML = strategies().map((x) => '<button data-s="' + x.id + '" class="' + (x.id === stratId ? 'on' : '') + '">' + x.name + (x.badge ? ' <span class="badge">' + x.badge + '</span>' : '') + '</button>').join('');
+    let prevTier = null;
+    nav.innerHTML = strategies().map((x) => {
+      let chip = '';
+      if (x.tier && x.tier !== prevTier) {
+        const tg = tierOf(x.tier);
+        prevTier = x.tier;
+        if (tg) chip = '<span class="tier-chip" title="' + tg.title + '">' + tg.code + '</span>';
+      }
+      return chip + '<button data-s="' + x.id + '" class="' + (x.id === stratId ? 'on' : '') + '">' + x.name + (x.badge ? ' <span class="badge">' + x.badge + '</span>' : '') + '</button>';
+    }).join('');
     nav.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => go(b.dataset.s, 0)));
 
     const steps = document.getElementById('steps');
@@ -32,7 +43,8 @@
     const sc = screensOf(s.id);
     const seen = (visited[s.id] = visited[s.id] || new Set());
     seen.add(stepIdx);
-    steps.innerHTML = '<h4>' + s.name + ' · экраны</h4>' + sc.map((x, i) => '<button class="step ' + (i === stepIdx ? 'on' : seen.has(i) ? 'done' : '') + '" data-i="' + i + '"><span class="num">' + (i + 1) + '</span><span>' + x.title + '</span></button>').join('');
+    const curTier = tierOf(s.tier);
+    steps.innerHTML = '<h4>' + (curTier ? 'Ступень ' + curTier.code + ' · ' : '') + s.name + ' · экраны</h4>' + sc.map((x, i) => '<button class="step ' + (i === stepIdx ? 'on' : seen.has(i) ? 'done' : '') + '" data-i="' + i + '"><span class="num">' + (i + 1) + '</span><span>' + x.title + '</span></button>').join('');
     steps.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => go(s.id, +b.dataset.i)));
 
     const cur = sc[stepIdx];
