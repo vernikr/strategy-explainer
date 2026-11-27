@@ -1,6 +1,10 @@
 /* Фирменные шрифты Claude / Anthropic (локальные WOFF2):
    1) Anthropic Interface & Anthropic Sans (Variable 300–800, opsz 12–48, GRAD) — интерфейс и латиница/формулы
-   2) Styrene B LC (Regular 400, Medium 500–600) — официальная кириллическая гарнитура бренда Anthropic/Claude
+   2) Styrene B LC (Regular 400, Medium 500–600) — официальная кириллическая гарнитура бренда Anthropic/Claude.
+      В Anthropic Interface/Sans нет кириллицы, поэтому весь русский текст рисуется Styrene B LC.
+      Используются версии *-Tight: межбуквенные просветы уменьшены на 0.02em (по 10/1000 em с каждой стороны глифа),
+      чтобы плотность кириллицы совпадала с латиницей Anthropic Interface (у оригинала просветы ~на 18% шире
+      относительно высоты строчных). Оригинальные файлы оставлены в fonts/ для сравнения.
    3) Anthropic Serif & Tiempos Text — фирменная антиква ответов и заголовков Claude
    4) Anthropic Mono — фирменный моноширинный шрифт блоков кода и формул Claude */
 
@@ -42,7 +46,7 @@
 
 @font-face {
   font-family: "Styrene B LC";
-  src: url("../fonts/StyreneBLC-Regular.woff2") format("woff2");
+  src: url("../fonts/StyreneBLC-Regular-Tight.woff2") format("woff2");
   font-weight: 300 450;
   font-style: normal;
   font-display: swap;
@@ -50,7 +54,7 @@
 
 @font-face {
   font-family: "Styrene B LC";
-  src: url("../fonts/StyreneBLC-Medium.woff2") format("woff2");
+  src: url("../fonts/StyreneBLC-Medium-Tight.woff2") format("woff2");
   font-weight: 451 800;
   font-style: normal;
   font-display: swap;
