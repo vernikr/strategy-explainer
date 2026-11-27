@@ -35,7 +35,7 @@
       el.innerHTML = `
         <div style="display:grid;grid-template-columns:560px 1fr;gap:28px;align-items:start">
           <div>
-            <div class="viz"><h4>Сценарий данных</h4><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0;color:#98a3b6"></p></div>
+            <div class="viz"><h4>Сценарий данных</h4><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0;color:var(--muted)"></p></div>
             <div class="viz"><h4>Выбор дня: <span id="dayv"></span></h4><input type="range" id="day" style="margin-top:8px">
               <div class="btns"><button class="b" id="bp">◀ День назад</button><button class="b" id="bn">День вперёд ▶</button><button class="b" id="bs">К следующему сигналу</button></div></div>
             <div class="viz calc-steps" id="steps"></div>
@@ -70,7 +70,7 @@
       el.querySelector('#bp').addEventListener('click', () => { s7.day = Math.max(0, s7.day - 1); draw(); });
       el.querySelector('#bn').addEventListener('click', () => { s7.day = Math.min(n - 1, s7.day + 1); draw(); });
       el.querySelector('#bs').addEventListener('click', () => { let i = s7.day + 1; while (i < n && !r.signal[i]) i++; s7.day = i < n ? i : firstSignal(); draw(); });
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
 
       function draw() {
         tabs.querySelectorAll('button').forEach((b, k) => b.classList.toggle('on', k === s7.scn));

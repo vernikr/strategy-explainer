@@ -361,7 +361,7 @@
         }));
       }
 
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
 
       function draw() {
         el.querySelector('#dirs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.d === s4.dir));

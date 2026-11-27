@@ -78,7 +78,7 @@
         ];
         el.querySelector('#tab1').innerHTML =
           '<tr><th>День</th><th>Календарных суток в клиринге</th><th>Списание в этот вечер</th><th>Накоплено с начала</th></tr>' +
-          rows.map((r, i) => '<tr' + (i === 5 ? ' class="sel"' : '') + '><td>' + (i === 5 ? '<b>' + r[0] + '</b>' : r[0]) + '</td><td>' + r[1] + '</td><td style="color:' + (r[3] > d * 1.5 ? GOLD : '#cdd7e8') + '">' + (r[3] ? '−' + f(r[3]) + ' п. (' + Math.round(r[3] * 100) + ' ₽)' : '0 (клиринга нет)') + '</td><td>−' + f(r[2]) + ' п.</td></tr>').join('');
+          rows.map((r, i) => '<tr' + (i === 5 ? ' class="sel"' : '') + '><td>' + (i === 5 ? '<b>' + r[0] + '</b>' : r[0]) + '</td><td>' + r[1] + '</td><td style="color:' + (r[3] > d * 1.5 ? GOLD : 'var(--text-2)') + '">' + (r[3] ? '−' + f(r[3]) + ' п. (' + Math.round(r[3] * 100) + ' ₽)' : '0 (клиринга нет)') + '</td><td>−' + f(r[2]) + ' п.</td></tr>').join('');
       }
       draw1();
     }
@@ -128,7 +128,7 @@
         <div class="viz">
           <h4>Проверьте паспорт пары и рублёвый баланс двух ног</h4>
           <div class="btns" id="b2" style="margin:0 0 10px"></div>
-          <p id="note2p" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="note2p" style="margin:0 0 10px;color:var(--muted)"></p>
           <div id="sl2"></div>
           <table class="t" id="tab2" style="margin-top:10px"></table>
           <div id="ver2" class="note" style="margin-top:10px"></div>

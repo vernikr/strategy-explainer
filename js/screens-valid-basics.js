@@ -185,7 +185,7 @@
         const hoW = (140 / 500) * 100;
 
         el.querySelector('#bar1').innerHTML =
-          '<div style="display:flex;height:30px;border-radius:8px;overflow:hidden;border:1px solid #2a3242;font-size:12px;font-weight:600;color:#0e1218">' +
+          '<div style="display:flex;height:30px;border-radius:8px;overflow:hidden;border:1px solid var(--line);font-size:12px;font-weight:600;color:#0e1218">' +
             '<div style="width:' + isW.toFixed(1) + '%;background:' + PRE + ';display:flex;align-items:center;justify-content:center">Обучение IS</div>' +
             (p > 0 ? '<div style="width:' + puW.toFixed(1) + '%;background:' + BAD + ';color:#fff;display:flex;align-items:center;justify-content:center">Purge+Emb</div>' : '') +
             '<div style="width:' + valW.toFixed(1) + '%;background:' + GOLD + ';display:flex;align-items:center;justify-content:center">Проверка WFO</div>' +

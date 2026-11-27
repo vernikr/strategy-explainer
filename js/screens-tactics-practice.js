@@ -290,7 +290,7 @@
             <div class="viz">
               <h4>Сценарий и включённые приёмы</h4>
               <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-              <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+              <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
               <div class="btns" id="flags" style="margin:0">
                 <button class="b" data-f="useLog">Лог-спред + равный объём</button>
                 <button class="b" data-f="rev">Вход на развороте</button>
@@ -354,7 +354,7 @@
         }, 350);
       });
 
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
 
       function draw() {
         tabs.querySelectorAll('button').forEach((b, k) => b.classList.toggle('on', k === s8.scn));
@@ -448,7 +448,7 @@
         <h3 style="margin:0 0 10px">1. Честный эксперимент: 4 сценария × 11 наборов данных × 5 вариантов</h3>
         <p style="max-width:960px">Переключайте сценарии: ни один приём не побеждает везде! Каждый лечит ровно свою болезнь — и берёт небольшую плату там, где этой болезни нет.</p>
         <div class="btns" id="tabs"></div>
-        <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+        <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
         <div id="ctl"></div>
         <div class="viz" style="margin-top:14px">
           <div class="scroll" style="max-height:420px"><table class="t" id="tab"></table></div>

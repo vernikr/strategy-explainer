@@ -186,8 +186,8 @@
           res.contrib.map((c, k) => {
             const wPct = Math.min(100, Math.abs(c) * 48);
             return '<div style="margin-top:6px;font-size:12.5px">' +
-              '<div style="display:flex;justify-content:space-between"><span>' + names[k] + '</span><b style="color:' + (c < -0.25 ? BAD : '#c8d2e6') + '">' + U.sgn(c) + '</b></div>' +
-              '<div style="height:8px;background:#1a2230;border-radius:4px;overflow:hidden"><div style="width:' + wPct.toFixed(1) + '%;height:100%;background:' + (c < -0.25 ? BAD : SIM) + '"></div></div>' +
+              '<div style="display:flex;justify-content:space-between"><span>' + names[k] + '</span><b style="color:' + (c < -0.25 ? BAD : 'var(--text-2)') + '">' + U.sgn(c) + '</b></div>' +
+              '<div style="height:8px;background:var(--surface-inset);border-radius:4px;overflow:hidden"><div style="width:' + wPct.toFixed(1) + '%;height:100%;background:' + (c < -0.25 ? BAD : SIM) + '"></div></div>' +
             '</div>';
           }).join('') + '</div>';
       }

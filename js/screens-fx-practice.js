@@ -141,7 +141,7 @@
         <div class="viz">
           <h4>Сценарий, режим исполнения и множитель издержек 3 ног</h4>
           <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-          <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="btns" id="modes" style="margin:0 0 10px"></div>
           <div id="mctl"></div>
           <div id="ctl"></div>
@@ -224,7 +224,7 @@
           '<tr><th>Нога</th><th>Вход → Выход</th><th>Вклад в рублёвых пунктах</th></tr>' +
           '<tr><td>1. Внутренний фьючерс (₽)</td><td>' + f(tr.domIn) + ' → ' + f(tr.domOut) + ' п.</td><td>' + col(tr.pnlDom, 2) + ' п.</td></tr>' +
           '<tr><td>2. Внешний фьючерс ($ → ₽ по ' + f(tr.fxOut) + ' ₽/$)</td><td>' + f(tr.worldIn) + ' → ' + f(tr.worldOut) + ' $ (' + U.sgn(tr.pnlWorldUsd, 2) + ' $)</td><td>' + col(tr.pnlWorldRub, 2) + ' п.</td></tr>' +
-          '<tr><td>3. Валютный фьючерс FX ' + (s6.mode === 0 ? '<span style="color:' + BAD + '">(отключён!)</span>' : '(номинал ' + f(tr.worldIn) + ' $)') + '</td><td>' + f(tr.fxIn) + ' → ' + f(tr.fxOut) + ' ₽/$</td><td>' + (s6.mode === 0 ? '<span style="color:#8b95a7">0,00 п. (не хеджировали)</span>' : col(tr.pnlFxRub, 2) + ' п.') + '</td></tr>' +
+          '<tr><td>3. Валютный фьючерс FX ' + (s6.mode === 0 ? '<span style="color:' + BAD + '">(отключён!)</span>' : '(номинал ' + f(tr.worldIn) + ' $)') + '</td><td>' + f(tr.fxIn) + ' → ' + f(tr.fxOut) + ' ₽/$</td><td>' + (s6.mode === 0 ? '<span style="color:var(--muted)">0,00 п. (не хеджировали)</span>' : col(tr.pnlFxRub, 2) + ' п.') + '</td></tr>' +
           '<tr><td colspan="2"><b>Грязный итог всех открытых ног</b></td><td><b>' + col(tr.gross, 2) + ' п.</b></td></tr>' +
           '<tr><td colspan="2">Издержки круга</td><td>−' + f(tr.cost, 2) + ' п.</td></tr>' +
           '<tr><td colspan="2"><b>Чистый итог сделки на счёте</b></td><td><b>' + col(tr.net, 2) + ' п.</b></td></tr></table>';
@@ -283,7 +283,7 @@
             '<td>' + f(tr.fxIn, 1) + ' → ' + f(tr.fxOut, 1) + '</td>' +
             '<td>' + U.sgn(tr.entryS, 1) + ' → ' + U.sgn(tr.exitS, 1) + '</td>' +
             '<td>' + (A.REASON[tr.reason] || tr.reason) + '</td>' +
-            '<td>' + col(tr.net, 2) + '</td></tr>').join('') || '<tr><td colspan="7" style="color:#8b95a7">Нет сделок</td></tr>');
+            '<td>' + col(tr.net, 2) + '</td></tr>').join('') || '<tr><td colspan="7" style="color:var(--muted)">Нет сделок</td></tr>');
 
         tl.querySelectorAll('tr.click').forEach((trEl) => trEl.addEventListener('click', () => {
           s6.sel = +trEl.dataset.i;
@@ -311,7 +311,7 @@
             <div class="viz">
               <h4>Сценарий и режим расчёта</h4>
               <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-              <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+              <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
               <div class="btns" id="modes" style="margin:0"></div>
             </div>
             <div class="viz">
@@ -450,7 +450,7 @@
         <div class="viz">
           <h4>Разбивка по каждой из 11 серий в выбранном сценарии</h4>
           <div class="btns" id="tabs8" style="margin:0 0 8px"></div>
-          <p id="note8" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="note8" style="margin:0 0 10px;color:var(--muted)"></p>
           <table class="t" id="seeds8"></table>
         </div>
         <div class="cards" style="margin-top:18px">
@@ -510,9 +510,9 @@
           all.map((row, idx) => {
             const a = row.agg;
             return '<tr' + (idx === s8.scn ? ' class="sel"' : '') + '><td><b>' + row.sc.name + '</b></td>' +
-              '<td>' + col(a[0].tot, 0) + ' п. <span style="color:#8b95a7">(DD −' + f(a[0].worstDD, 0) + ')</span></td>' +
-              '<td>' + col(a[1].tot, 0) + ' п. <span style="color:#8b95a7">(DD −' + f(a[1].worstDD, 0) + ')</span></td>' +
-              '<td><b>' + col(a[2].tot, 0) + ' п.</b> · ' + a[2].posCnt + '/11 в плюсе <span style="color:#8b95a7">(DD −' + f(a[2].worstDD, 0) + ')</span></td></tr>';
+              '<td>' + col(a[0].tot, 0) + ' п. <span style="color:var(--muted)">(DD −' + f(a[0].worstDD, 0) + ')</span></td>' +
+              '<td>' + col(a[1].tot, 0) + ' п. <span style="color:var(--muted)">(DD −' + f(a[1].worstDD, 0) + ')</span></td>' +
+              '<td><b>' + col(a[2].tot, 0) + ' п.</b> · ' + a[2].posCnt + '/11 в плюсе <span style="color:var(--muted)">(DD −' + f(a[2].worstDD, 0) + ')</span></td></tr>';
           }).join('');
 
         const cur = all[s8.scn];
@@ -521,9 +521,9 @@
           SEEDS.map((sd, idx) => {
             const r = cur.bySeed[idx];
             return '<tr><td>Серия #' + (idx + 1) + ' (seed ' + sd + ')</td>' +
-              '<td>' + col(r[0].total, 1) + ' <span style="color:#8b95a7">/ −' + f(r[0].maxDD, 1) + '</span></td>' +
-              '<td>' + col(r[1].total, 1) + ' <span style="color:#8b95a7">/ −' + f(r[1].maxDD, 1) + '</span></td>' +
-              '<td><b>' + col(r[2].total, 1) + '</b> <span style="color:#8b95a7">(' + r[2].count + ' сд., DD −' + f(r[2].maxDD, 1) + ')</span></td></tr>';
+              '<td>' + col(r[0].total, 1) + ' <span style="color:var(--muted)">/ −' + f(r[0].maxDD, 1) + '</span></td>' +
+              '<td>' + col(r[1].total, 1) + ' <span style="color:var(--muted)">/ −' + f(r[1].maxDD, 1) + '</span></td>' +
+              '<td><b>' + col(r[2].total, 1) + '</b> <span style="color:var(--muted)">(' + r[2].count + ' сд., DD −' + f(r[2].maxDD, 1) + ')</span></td></tr>';
           }).join('');
       }
       draw8();

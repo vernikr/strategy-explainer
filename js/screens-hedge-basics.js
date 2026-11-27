@@ -12,7 +12,7 @@
   // число без лишних нулей: 1,4 вместо 1,400; до трёх знаков
   const nz = (v) => { if (v === null || v === undefined || Number.isNaN(v)) return '—'; for (let d = 0; d <= 3; d++) if (Math.abs(v * Math.pow(10, d) - Math.round(v * Math.pow(10, d))) < 1e-9) return U.fmt(v, d); return U.fmt(v, 3); };
   const gen = (i, seed) => E.genHedge(seed === undefined ? A.state.seed : seed, SC[i]);
-  const prereq = '<div class="note">Если слова «спред», «среднее», «σ» и «z-score» вам не знакомы, сначала прочитайте <a href="#zscore/1" style="color:#7ee0b5">разбор простого z-score</a>: здесь он считается известным.</div>';
+  const prereq = '<div class="note">Если слова «спред», «среднее», «σ» и «z-score» вам не знакомы, сначала прочитайте <a href="#zscore/1" style="color:var(--accent)">разбор простого z-score</a>: здесь он считается известным.</div>';
 
   /* ---------- 1. Зачем нужен коэффициент хеджирования ---------- */
   const s1 = { scn: 1, k: 1, shock: 10 };
@@ -37,7 +37,7 @@
       ${prereq}`,
     mount(el) {
       el.innerHTML = `
-        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <h4>Цены A и B</h4><div class="legend"><span><i style="background:${C.a}"></i>инструмент A</span><span><i style="background:${C.b}"></i>инструмент B</span></div><div id="c1"></div></div>
         <div class="viz"><h4>Спред A − k·B: подберите k</h4><p class="cap">Серая линия — простой спред A − B (k = 1). Зелёная — спред с выбранным k.</p>
           <div class="legend"><span><i style="background:${GREY}"></i>A − B</span><span><i style="background:${ME}"></i>A − k·B</span></div><div id="c2"></div><div id="ctl"></div><div class="note" id="read"></div></div>
@@ -102,7 +102,7 @@
         <div class="viz"><h4>Облако точек: цена B (по горизонтали) и цена A (по вертикали)</h4><p class="cap">Жёлтая точка — последний день окна. Красные отрезки — остатки вашей прямой.</p>
           <div class="legend"><span><i class="dot" style="background:${C.a}"></i>день окна</span><span><i style="background:${ME}"></i>ваша прямая</span><span><i style="background:${BEST}"></i>лучшая прямая (по методу наименьших квадратов)</span></div>
           <div id="sc"></div><div id="ctl"></div>
-          <div class="btns"><button class="b" id="bBest">Подставить лучшую прямую</button><label style="display:flex;gap:8px;align-items:center;font-size:14px;color:#98a3b6;margin-left:8px"><input type="checkbox" id="chk"> показать лучшую прямую на графике</label></div>
+          <div class="btns"><button class="b" id="bBest">Подставить лучшую прямую</button><label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--muted);margin-left:8px"><input type="checkbox" id="chk"> показать лучшую прямую на графике</label></div>
           <div class="note" id="read"></div></div>
         <div class="viz"><h4>Выбор окна</h4><div id="ctl2"></div></div>`;
       el.querySelector('#sc').innerHTML = '<div class="chartbox"><canvas></canvas></div>';
@@ -169,7 +169,7 @@
       <div class="note warn"><b>Проверьте сами.</b> Измените любое число справа и посмотрите, как сдвинулись k, остатки и z. Сумма остатков при любых числах остаётся нулевой: это не случайность, а свойство метода.</div>`,
     mount(el) {
       el.innerHTML = `
-        <div class="viz"><h4>Пять дней: введите свои числа</h4><div class="btns" id="pre" style="margin:0 0 10px"></div><p id="pnote" style="margin:0 0 10px;color:#98a3b6"></p>
+        <div class="viz"><h4>Пять дней: введите свои числа</h4><div class="btns" id="pre" style="margin:0 0 10px"></div><p id="pnote" style="margin:0 0 10px;color:var(--muted)"></p>
           <table class="t" id="tab"></table></div>
         <div class="viz calc-steps" id="steps"></div>
         <div class="viz"><h4>Облако и прямая</h4><div id="sc"></div></div>`;
@@ -187,13 +187,13 @@
         el.querySelector('#tab').innerHTML = head + rows;
         el.querySelectorAll('#tab input').forEach((inp) => inp.addEventListener('input', () => { s3[inp.dataset.c][+inp.dataset.i] = parseFloat(inp.value); draw(); }));
       }
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
       function draw() {
         el.querySelector('#pnote').textContent = PRESETS[s3.preset].note;
         el.querySelectorAll('#pre button').forEach((b) => b.classList.toggle('on', +b.dataset.i === s3.preset));
         const ok = s3.x.every((v) => Number.isFinite(v)) && s3.y.every((v) => Number.isFinite(v));
         const q = (id, v) => { el.querySelector('#' + id).textContent = v; };
-        if (!ok) { el.querySelector('#steps').innerHTML = '<p style="color:#98a3b6">Заполните все десять чисел.</p>'; return; }
+        if (!ok) { el.querySelector('#steps').innerHTML = '<p style="color:var(--muted)">Заполните все десять чисел.</p>'; return; }
         const fit = E.ols(s3.x, s3.y);
         if (fit.k === null) { el.querySelector('#steps').innerHTML = '<div class="note warn">Все значения B одинаковы: B не двигался, и понять, как A зависит от B, невозможно. Коэффициент не определён. Измените хотя бы одно значение B.</div>'; return; }
         let sdx = 0, sdy = 0, sdxx = 0, sdxy = 0, sres = 0, sres2 = 0;
@@ -240,7 +240,7 @@
       <div class="note warn"><b>Что это значит для стратегии.</b> Когда k прыгает, спред A − k·B — не один непрерывный ряд, а «склейка» кусков с разными k. Поэтому внутри сделки k замораживают: купили столько контрактов B, сколько говорил k в момент входа, и держим их, пока не закроем сделку (экран 6). Подгонять контракты каждый день пришлось бы платить ${T('rebalance', 'ребалансировкой')}.</div>`,
     mount(el) {
       el.innerHTML = `
-        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <h4>Оценка k по окну</h4><div class="legend"><span><i style="background:${GREY}"></i>настоящее β (в реальности неизвестно)</span><span><i style="background:${ME}"></i>оценка k</span><span><i style="background:#7ee0b566"></i>k ± 2 стандартные ошибки</span></div><div id="c1"></div><div id="ctl"></div></div>
         <div class="viz"><h4>Спред A − k·B с сегодняшним k</h4><p class="cap">Это не один непрерывный ряд: при каждом новом k «вся история» в расчёте пересчитывается.</p><div id="c2"></div></div>
         <div class="viz"><h4>Какое окно лучше: цифры по 11 наборам данных (дни 120–320)</h4><table class="t" id="tab"></table><div class="note" id="read"></div></div>`;

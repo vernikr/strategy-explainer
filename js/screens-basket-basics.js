@@ -378,13 +378,13 @@
           const zeroX = 210;
           const w = Math.min(320, Math.abs(val) * scale);
           const x = val >= 0 ? zeroX : zeroX - w;
-          return `<text x="12" y="${y + 15}" fill="#cdd7e8" font-size="12.5">${label}</text>` +
+          return `<text x="12" y="${y + 15}" fill="var(--text-2)" font-size="12.5">${label}</text>` +
             `<rect x="${x}" y="${y}" width="${Math.max(2, w)}" height="20" rx="4" fill="${color}"/>` +
             `<text x="${val >= 0 ? x + w + 8 : x - 8}" y="${y + 15}" text-anchor="${val >= 0 ? 'start' : 'end'}" fill="${color}" font-size="12.5" font-weight="600">${U.sgn(val, 2)} п.</text>`;
         };
 
         el.querySelector('#svg4').innerHTML = `
-          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:#10151f;border:1px solid #262e3f;border-radius:10px;display:block">
+          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:var(--surface-inset);border:1px solid var(--line);border-radius:10px;display:block">
             <line x1="210" y1="10" x2="210" y2="108" stroke="#ffffff33" stroke-dasharray="3,3"/>
             ${bar(14, 'Грязный ход спреда', s4.grossMove, PRE)}
             ${bar(46, 'Удар «по рынку» во все ' + M + ' ног', netMarket, netMarket >= 0 ? SIM : BAD)}

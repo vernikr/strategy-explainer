@@ -158,7 +158,7 @@
         '<h3 style="margin:22px 0 10px;color:#7ee0b5">' + g.title + '</h3><div class="cards">' +
         VARIANTS.slice(g.from, g.to).map((v) =>
           '<div class="card"><h4>' + v[0] + '</h4><p>' + v[1] + '</p><p><b>Что даёт:</b> ' + v[2] + '</p><p><b>Цена:</b> ' + v[3] + '</p>' +
-          (v[4] ? '<a href="#' + v[4] + '" class="tag" style="color:#7ee0b5;text-decoration:none">' + (v[4].includes('/') ? 'разбор во вкладке «Приёмы» →' : 'открыть главу →') + '</a>' : '<span class="tag">в плане</span>') + '</div>'
+          (v[4] ? '<a href="#' + v[4] + '" class="tag" style="color:var(--accent);text-decoration:none">' + (v[4].includes('/') ? 'разбор во вкладке «Приёмы» →' : 'открыть главу →') + '</a>' : '<span class="tag">в плане</span>') + '</div>'
         ).join('') + '</div>'
       ).join('');
     }
@@ -172,10 +172,10 @@
     full: true,
     mount(el) {
       const items = Object.keys(window.GLOSSARY).map((k) => window.GLOSSARY[k]).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
-      el.innerHTML = '<input type="search" id="q" placeholder="Начните вводить слово…" style="width:420px;margin-bottom:16px;background:#10151f;border:1px solid #262e3f;border-radius:8px;color:#e4e9f2;padding:9px 12px;font:inherit"><div class="cards" id="list"></div>';
+      el.innerHTML = '<input type="search" id="q" placeholder="Начните вводить слово…" style="width:420px;margin-bottom:16px;background:var(--surface-inset);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px 12px;font:inherit"><div class="cards" id="list"></div>';
       function draw() {
         const q = el.querySelector('#q').value.trim().toLowerCase();
-        el.querySelector('#list').innerHTML = items.filter((g) => !q || g[0].toLowerCase().includes(q) || g[1].toLowerCase().includes(q)).map((g) => '<div class="card"><h4>' + g[0] + '</h4><p>' + g[1] + '</p></div>').join('') || '<p style="color:#98a3b6">Ничего не найдено.</p>';
+        el.querySelector('#list').innerHTML = items.filter((g) => !q || g[0].toLowerCase().includes(q) || g[1].toLowerCase().includes(q)).map((g) => '<div class="card"><h4>' + g[0] + '</h4><p>' + g[1] + '</p></div>').join('') || '<p style="color:var(--muted)">Ничего не найдено.</p>';
       }
       el.querySelector('#q').addEventListener('input', draw);
       draw();

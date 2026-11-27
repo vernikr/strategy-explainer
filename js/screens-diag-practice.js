@@ -98,7 +98,7 @@
             '<td>' + f(r.yhat, 1) + '</td>' +
             '<td>' + U.sgn(r.err, 1) + (r.clipped ? ' → <b style="color:' + ME + '">' + U.sgn(r.effErr, 1) + '</b>' : '') + '</td>' +
             '<td>' + f(r.K * 100, 3) + '</td>' +
-            '<td>' + f(r.betaPrev, 3) + ' → <b style="color:' + ME + '">' + f(r.betaNext, 3) + '</b> <span style="color:#98a3b6">(' + f(r.trueK, 2) + ')</span></td></tr>'
+            '<td>' + f(r.betaPrev, 3) + ' → <b style="color:' + ME + '">' + f(r.betaNext, 3) + '</b> <span style="color:var(--muted)">(' + f(r.trueK, 2) + ')</span></td></tr>'
           ).join('');
       }
       draw5();
@@ -121,7 +121,7 @@
             <div class="btns" id="sc6"></div>
             <div class="btns" id="sd6"></div>
           </div>
-          <p id="note6" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="note6" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="btns" id="md6" style="margin:0 0 12px"></div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
             <div id="sl6n"></div><div id="sl6in"></div><div id="sl6out"></div>
@@ -228,7 +228,7 @@
             '<td>' + f(tr.kIn) + '</td><td>' + U.sgn(tr.entryZ) + 'σ → ' + U.sgn(tr.exitZ) + 'σ</td>' +
             '<td>' + col(tr.gross) + '</td><td><b>' + col(tr.net) + '</b></td>' +
             '<td><span class="pill ' + (tr.reason === 'stop' || tr.reason === 'break' ? 'stop' : tr.reason === 'target' || tr.reason === 'exit' ? 'ok' : 'time') + '">' + (A.REASON[tr.reason] || tr.reason) + '</span></td></tr>'
-          ).join('') : '<tr><td colspan="8" style="color:#98a3b6">Сделок не открывалось (пара заблокирована индикатором здоровья или не пробила порог).</td></tr>');
+          ).join('') : '<tr><td colspan="8" style="color:var(--muted)">Сделок не открывалось (пара заблокирована индикатором здоровья или не пробила порог).</td></tr>');
       }
       draw6();
     }
@@ -317,7 +317,7 @@
 
         el.querySelector('#right7').innerHTML =
           '<h4>Паспорт здоровья пары на вечер дня #' + (s7.day + 1) + '</h4>' +
-          '<div style="margin:6px 0 12px;display:flex;align-items:center;gap:10px">' + badgeHtml(ex.health) + '<span style="color:#98a3b6">Итоговый z-score сигнала: <b>' + U.sgn(ex.z) + 'σ</b></span></div>' +
+          '<div style="margin:6px 0 12px;display:flex;align-items:center;gap:10px">' + badgeHtml(ex.health) + '<span style="color:var(--muted)">Итоговый z-score сигнала: <b>' + U.sgn(ex.z) + 'σ</b></span></div>' +
           '<table class="t">' +
             '<tr><th>Датчик диагностики</th><th>Текущее число</th><th>Вердикт датчика</th></tr>' +
             '<tr><td>Тест Дики — Фуллера (ADF τ)</td><td>' + f(sm.adfTau) + ' (порог ' + f(sm.adfCrit) + ')</td><td>' + (sm.adfPass ? '<span class="pos">✓ есть возврат</span>' : '<span class="neg">✗ слабый возврат</span>') + '</td></tr>' +
@@ -381,10 +381,10 @@
       el.querySelector('#tab8sum').innerHTML =
         '<tr><th>Рыночный режим</th>' + MODES.map((m) => '<th>' + m.name + '</th>').join('') + '</tr>' +
         summary.map((row) =>
-          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:#98a3b6;font-size:13px">' + row.sc.note + '</span></td>' +
+          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:var(--muted);font-size:13px">' + row.sc.note + '</span></td>' +
           MODES.map((m) => {
             const st = row.byMode[m.id];
-            return '<td><b>' + col(st.tot, 0) + ' п.</b><br><span style="color:#98a3b6;font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
+            return '<td><b>' + col(st.tot, 0) + ' п.</b><br><span style="color:var(--muted);font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
           }).join('') + '</tr>'
         ).join('');
 

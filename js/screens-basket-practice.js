@@ -164,7 +164,7 @@
         <div class="viz">
           <h4>Сценарий, режим корзины, окно регрессии весов и издержки</h4>
           <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-          <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="btns" id="modes" style="margin:0 0 10px"></div>
           <div id="rctl"></div>
           <div id="mctl"></div>
@@ -326,7 +326,7 @@
             '<td>' + (tr.dir === 1 ? '<span class="pos">лонг</span>' : '<span class="neg">шорт</span>') + '</td>' +
             '<td>' + f(tr.w1, 2) + '; ' + f(tr.w2, 2) + '</td>' +
             '<td>' + (A.REASON[tr.reason] || tr.reason) + '</td>' +
-            '<td>' + col(tr.net, 2) + '</td></tr>').join('') || '<tr><td colspan="6" style="color:#8b95a7">Нет сделок</td></tr>');
+            '<td>' + col(tr.net, 2) + '</td></tr>').join('') || '<tr><td colspan="6" style="color:var(--muted)">Нет сделок</td></tr>');
 
         tl.querySelectorAll('tr.click').forEach((trEl) => trEl.addEventListener('click', () => {
           s6.sel = +trEl.dataset.i;
@@ -354,7 +354,7 @@
             <div class="viz">
               <h4>Сценарий и режим корзины</h4>
               <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-              <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+              <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
               <div class="btns" id="modes" style="margin:0"></div>
             </div>
             <div class="viz">
@@ -497,7 +497,7 @@
         <div class="viz">
           <h4>Результаты по каждой из 11 серий в выбранном сценарии</h4>
           <div class="btns" id="tabs8" style="margin:0 0 8px"></div>
-          <p id="note8" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="note8" style="margin:0 0 10px;color:var(--muted)"></p>
           <table class="t" id="seeds8"></table>
         </div>
         <div class="cards" style="margin-top:18px">
@@ -562,7 +562,7 @@
           all.map((row, idx) => {
             const a = row.agg;
             return '<tr' + (idx === s8.scn ? ' class="sel"' : '') + '><td><b>' + row.sc.name + '</b></td>' +
-              a.map((x) => '<td>' + col(x.tot, 0) + ' п. <span style="color:#8b95a7">(' + x.cnt + ' сд., DD −' + f(x.worstDD, 0) + ')</span></td>').join('') + '</tr>';
+              a.map((x) => '<td>' + col(x.tot, 0) + ' п. <span style="color:var(--muted)">(' + x.cnt + ' сд., DD −' + f(x.worstDD, 0) + ')</span></td>').join('') + '</tr>';
           }).join('');
 
         const cur = all[s8.scn];
@@ -571,7 +571,7 @@
           SEEDS.map((sd, idx) => {
             const r = cur.bySeed[idx];
             return '<tr><td>Серия #' + (idx + 1) + ' (seed ' + sd + ')</td>' +
-              r.map((x) => '<td>' + col(x.total, 1) + ' <span style="color:#8b95a7">(' + x.count + ' сд., DD −' + f(x.maxDD, 1) + ')</span></td>').join('') + '</tr>';
+              r.map((x) => '<td>' + col(x.total, 1) + ' <span style="color:var(--muted)">(' + x.count + ' сд., DD −' + f(x.maxDD, 1) + ')</span></td>').join('') + '</tr>';
           }).join('');
       }
       draw8();

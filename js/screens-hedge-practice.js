@@ -14,7 +14,7 @@
   const gen = (i, seed) => E.genHedge(seed === undefined ? A.state.seed : seed, SC[i]);
   const hp = (over) => Object.assign(A.btParams(), over || {});
   const btH = (d, over) => E.backtestHedge(d.a, d.b, hp(over));
-  const prereq = '<div class="note">Если слова «спред», «z-score» и «коэффициент хеджирования» вам не знакомы, начните с <a href="#zscore/1" style="color:#7ee0b5">разбора простого z-score</a> и экранов 1–4 этого раздела.</div>';
+  const prereq = '<div class="note">Если слова «спред», «z-score» и «коэффициент хеджирования» вам не знакомы, начните с <a href="#zscore/1" style="color:var(--accent)">разбора простого z-score</a> и экранов 1–4 этого раздела.</div>';
 
   /* ---------- 5. Округление до целых контрактов ---------- */
   const s5 = { k: 1.43, cap: 10, move: 10, scn: 1, lots: 5 };
@@ -73,7 +73,7 @@
           <p class="cap">Для каждого L от 1 до выбранного потолка: сколько контрактов B брать, какой k получится и сколько рынка «просочится» в позицию.</p>
           <div id="ctl1"></div><table class="t" id="tab1"></table><div class="note" id="read1"></div></div>
         <div class="viz"><h4>Как округление влияет на стратегию</h4>
-          <div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+          <div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="legend"><span><i style="background:${GREY}"></i>настоящее β (в реальности неизвестно)</span><span><i style="background:#7ee0b566"></i>k из регрессии</span><span><i style="background:${GOLD}"></i>k факт (после округления)</span></div>
           <div id="c1"></div><div id="ctl2"></div>
           <table class="t" id="tab2" style="margin-top:12px"></table><div class="note" id="read2"></div></div>`;

@@ -93,9 +93,9 @@
           const metricTag = s5.skeptical
             ? '<span style="color:' + (wSr > 0 ? ME : BAD) + '">2022 SR ' + U.sgn(wSr, 2) + '</span>'
             : '<span>скор ' + f(p.soloScore) + '</span>';
-          return '<div data-id="' + p.id + '" style="cursor:pointer;padding:6px 8px;border-radius:8px;border:1px solid ' + (on ? ME : '#283142') + ';background:' + (on ? 'rgba(126,224,181,0.12)' : '#121823') + ';font-size:12.5px">' +
+          return '<div data-id="' + p.id + '" style="cursor:pointer;padding:6px 8px;border-radius:8px;border:1px solid ' + (on ? 'var(--accent-border)' : 'var(--line)') + ';background:' + (on ? 'var(--accent-soft)' : 'var(--surface-inset)') + ';font-size:12.5px">' +
             '<div style="display:flex;justify-content:space-between"><b>' + (on ? '☑ ' : '☐ ') + p.code + '</b>' + metricTag + '</div>' +
-            '<div style="color:#8b96ab;font-size:11.5px">' + p.cluster + ' · ГО ' + p.margin + ' тыс.</div>' +
+            '<div style="color:var(--muted);font-size:11.5px">' + p.cluster + ' · ГО ' + p.margin + ' тыс.</div>' +
           '</div>';
         }).join('');
 
@@ -308,12 +308,12 @@
             rows.map((r) => '<tr' + (r[2] ? ' style="background:rgba(255,209,102,0.14);font-weight:700"' : '') + '>' +
               '<td>' + r[0] + '</td>' +
               '<td>' + f(r[1], 2) + ' связок</td>' +
-              '<td style="color:' + (r[2] ? GOLD : '#8b96ab') + '">' + (r[2] ? '★ АКТИВНЫЙ ТОРМОЗ (задал размер!)' : 'запас есть') + '</td>' +
+              '<td style="color:' + (r[2] ? GOLD : 'var(--muted)') + '">' + (r[2] ? '★ АКТИВНЫЙ ТОРМОЗ (задал размер!)' : 'запас есть') + '</td>' +
             '</tr>').join('') +
           '</table>';
 
         el.querySelector('#chk7').innerHTML =
-          '<div style="background:#10151f;border:1px solid #262e3f;border-radius:8px;padding:8px 10px;font-size:12.5px">' +
+          '<div style="background:var(--surface-inset);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px">' +
             '<b>Pre-trade checklist контура Monitor (§8.5):</b>' +
             '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 12px;margin-top:4px">' +
               chk.items.map((it) => '<div>' + (it.ok ? '<b style="color:' + ME + '">✓</b> ' : '<b style="color:' + BAD + '">✗</b> <span style="color:' + BAD + '">') + it.label + (it.ok ? '' : '</span>') + '</div>').join('') +

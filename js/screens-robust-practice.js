@@ -11,7 +11,7 @@
   const f = (v, d) => U.fmt(v, d === undefined ? 2 : d);
   const params = (mode) => Object.assign(A.btParams(), { mode });
   const run = (series, mode) => E.backtest(series, params(mode));
-  const chip = (v, o) => '<span style="display:inline-block;padding:3px 7px;margin:2px;border-radius:6px;background:#232a3b;font-size:13px;font-variant-numeric:tabular-nums;' +
+  const chip = (v, o) => '<span style="display:inline-block;padding:3px 7px;margin:2px;border-radius:6px;background:var(--panel-2);font-size:13px;font-variant-numeric:tabular-nums;' +
     (o && o.mid ? 'background:#7ee0b522;outline:1px solid ' + RB + ';' : '') + '">' + f(v, Number.isInteger(v) ? 0 : 1) + '</span>';
   const midIdx = (len) => (len % 2 ? [len >> 1] : [len / 2 - 1, len / 2]);
 
@@ -55,7 +55,7 @@
       <p>Переключайте сценарий и двигайте N и порог: цифры пересчитываются по всем 11 наборам учебных данных.</p>`,
     mount(el) {
       el.innerHTML = `
-        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 10px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <h4>Центр: среднее и медиана</h4><div class="legend"><span><i style="background:${C.spread}"></i>спред</span><span><i style="background:${SIM}"></i>среднее окна</span><span><i style="background:${RB}"></i>медиана</span></div><div id="c1"></div></div>
         <div class="viz"><h4>Разброс: σ и робастная σ</h4><div class="legend"><span><i style="background:${SIM}"></i>σ окна</span><span><i style="background:${RB}"></i>робастная σ</span></div><div id="c2"></div></div>
         <div class="viz"><h4>Z-score: сравнение</h4><div class="legend"><span><i style="background:${SIM}"></i>z окна</span><span><i style="background:${RB}"></i>z робастный</span></div><div id="c3"></div><div id="ctl"></div></div>
@@ -102,7 +102,7 @@
         <li>z ушёл за стоп → закрыть с убытком;</li>
         <li>одна позиция за раз.</li>
       </ol>
-      <p>Подробности каждого правила — на <a href="#zscore/5" style="color:#7ee0b5">экране «Правила» простого z-score</a>. Результат сделки считается так же: направление × (спред на выходе − спред на входе) − издержки.</p>
+      <p>Подробности каждого правила — на <a href="#zscore/5" style="color:var(--accent)">экране «Правила» простого z-score</a>. Результат сделки считается так же: направление × (спред на выходе − спред на входе) − издержки.</p>
       <h3>Что меняется</h3>
       <p>Меняются моменты, когда z пересекает пороги. Справа обе стратегии работают с <b>одними и теми же настройками</b> на одних и тех же данных.</p>
       <h3>Особенность: сделки на выбросах</h3>
@@ -111,7 +111,7 @@
         <li>если спред действительно подскочил и вернулся (как в наших учебных данных), сделка может оказаться удачной;</li>
         <li>если это ошибочная цена, по которой сделку реально не совершить, вход по ней — просто потеря: комиссия плюс сделка по неверной цене.</li>
       </ul>
-      <div class="note bad"><b>Риски остаются теми же.</b> Робастность не защищает от разрыва связи, издержек и подгонки под прошлое, см. <a href="#zscore/9" style="color:#7ee0b5">экран «Риски и ловушки»</a>. А если больше половины значений в окне совпадают, MAD = 0, z не определён, и в такой день решения нет.</div>`,
+      <div class="note bad"><b>Риски остаются теми же.</b> Робастность не защищает от разрыва связи, издержек и подгонки под прошлое, см. <a href="#zscore/9" style="color:var(--accent)">экран «Риски и ловушки»</a>. А если больше половины значений в окне совпадают, MAD = 0, z не определён, и в такой день решения нет.</div>`,
     mount(el) {
       el.innerHTML = `
         <div class="viz"><h4>Робастный z-score и сделки</h4>
@@ -181,7 +181,7 @@
         ev.target.textContent = '❚❚ Пауза';
         window.__stepTimer = setInterval(() => { if (t >= n - 1) { clearInterval(window.__stepTimer); window.__stepTimer = null; ev.target.textContent = '▶ Автопроигрывание'; return; } t++; draw(); }, 350);
       });
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
       function draw() {
         const p = A.state.params, b = bt(), g = (v, k) => U.fmt(v, k === undefined ? 3 : k);
         if (t < p.n - 1) t = p.n - 1;
@@ -224,7 +224,7 @@
     mount(el) {
       el.innerHTML = `
         <div class="note warn"><b>Как читать.</b> Сценарии придуманы на синтетических данных и показывают механику, а не доказывают превосходство. Итог зависит от настроек: подвигайте порог входа и N. Помните: у трёх стратегий разные шкалы z, поэтому одинаковый порог — не одинаковые условия.</div>
-        <div class="viz" style="margin-top:16px"><div class="btns" id="tabs" style="margin:0 0 12px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p><div id="ctl"></div><div id="sum" class="note" style="margin-top:10px"></div><div class="scroll" style="max-height:none;margin-top:12px"><table class="t" id="tab"></table></div></div>
+        <div class="viz" style="margin-top:16px"><div class="btns" id="tabs" style="margin:0 0 12px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p><div id="ctl"></div><div id="sum" class="note" style="margin-top:10px"></div><div class="scroll" style="max-height:none;margin-top:12px"><table class="t" id="tab"></table></div></div>
         <h3 style="margin:30px 0 14px">Итоги простыми словами</h3>
         <div class="cards" id="cards"></div>`;
       const tabs = el.querySelector('#tabs');

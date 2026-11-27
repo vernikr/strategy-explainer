@@ -149,7 +149,7 @@
             <div class="btns" id="sc6"></div>
             <div class="btns" id="sd6"></div>
           </div>
-          <p id="note6" style="margin:0;color:#98a3b6"></p>
+          <p id="note6" style="margin:0;color:var(--muted)"></p>
         </div>
         <div id="kpi6" style="margin-top:12px"></div>
         <div class="viz" style="margin-top:12px">
@@ -333,10 +333,10 @@
       el.querySelector('#tab8sum').innerHTML =
         '<tr><th>Сценарий проверки</th>' + APPROACHES.map((a) => '<th>' + a.name + '</th>').join('') + '<th>Вердикты гейта</th></tr>' +
         summary.map((row) =>
-          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:#98a3b6;font-size:13px">' + row.sc.note + '</span></td>' +
+          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:var(--muted);font-size:13px">' + row.sc.note + '</span></td>' +
           APPROACHES.map((a) => {
             const st = row.byApp[a.id];
-            return '<td><b>' + col(st.tot, 0) + ' п.</b><br><span style="color:#98a3b6;font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
+            return '<td><b>' + col(st.tot, 0) + ' п.</b><br><span style="color:var(--muted);font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
           }).join('') +
           '<td><span class="pos">PASS ' + row.passCnt + '</span> · <span style="color:' + GOLD + '">BORD ' + row.bordCnt + '</span> · <span class="neg">REJ ' + row.rejCnt + '</span></td></tr>'
         ).join('');

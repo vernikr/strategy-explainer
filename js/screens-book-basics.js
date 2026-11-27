@@ -38,10 +38,10 @@
         <div class="viz">
           <h4>Воронка конвейера и досье пары (кликните любого из 6 кандидатов пула!)</h4>
           <div style="display:flex;gap:4px;margin:0 0 10px;font-size:11.5px;font-weight:700;text-align:center">
-            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px">1. POOL (6)</div>
-            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px;color:${PRE}">2. SHORTLIST (4)</div>
-            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px;color:${GOLD}">3. VALIDATE (2 PASS)</div>
-            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px;color:${ME}">4. BOOK → 5. MONITOR</div>
+            <div style="flex:1;padding:6px 4px;background:var(--surface-inset);border:1px solid var(--line);border-radius:6px">1. POOL (6)</div>
+            <div style="flex:1;padding:6px 4px;background:var(--surface-inset);border:1px solid var(--line);border-radius:6px;color:${PRE}">2. SHORTLIST (4)</div>
+            <div style="flex:1;padding:6px 4px;background:var(--surface-inset);border:1px solid var(--line);border-radius:6px;color:${GOLD}">3. VALIDATE (2 PASS)</div>
+            <div style="flex:1;padding:6px 4px;background:var(--surface-inset);border:1px solid var(--line);border-radius:6px;color:${ME}">4. BOOK → 5. MONITOR</div>
           </div>
           <div class="btns" id="b0" style="margin:0 0 10px"></div>
           <div id="dossier0"></div>
@@ -65,9 +65,9 @@
         }).join('');
 
         const gateRows = gt.checks.map((g) =>
-          '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1d2432;font-size:12.5px">' +
+          '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px">' +
             '<span>' + (g.ok ? '<b style="color:' + ME + '">✓</b> ' : '<b style="color:' + BAD + '">✗</b> ') + g.label + '</span>' +
-            '<b style="color:' + (g.ok ? '#dce4f2' : BAD) + '">' + g.val + '</b>' +
+            '<b style="color:' + (g.ok ? 'var(--text)' : BAD) + '">' + g.val + '</b>' +
           '</div>'
         ).join('');
 
@@ -75,22 +75,22 @@
           ? COMP_NAMES.map((nm, k) => {
               const p = cs.parts[k];
               return '<div style="margin-top:6px;font-size:12.5px">' +
-                '<div style="display:flex;justify-content:space-between"><span><b>' + nm[0] + '</b> <span style="color:#8b96ab">(' + nm[1] + ')</span></span><b>' + f(p.raw) + ' → +' + f(p.contrib, 3) + '</b></div>' +
-                '<div style="height:7px;background:#151c28;border-radius:4px;overflow:hidden;margin-top:2px"><div style="width:' + (p.raw * 100).toFixed(0) + '%;height:100%;background:' + (p.raw >= 0.7 ? ME : (p.raw >= 0.5 ? GOLD : BAD)) + '"></div></div>' +
+                '<div style="display:flex;justify-content:space-between"><span><b>' + nm[0] + '</b> <span style="color:var(--muted)">(' + nm[1] + ')</span></span><b>' + f(p.raw) + ' → +' + f(p.contrib, 3) + '</b></div>' +
+                '<div style="height:7px;background:var(--surface-inset);border-radius:4px;overflow:hidden;margin-top:2px"><div style="width:' + (p.raw * 100).toFixed(0) + '%;height:100%;background:' + (p.raw >= 0.7 ? ME : (p.raw >= 0.5 ? GOLD : BAD)) + '"></div></div>' +
               '</div>';
             }).join('')
           : '<div class="note bad" style="margin-top:8px"><b>Скоринг заблокирован гейтом §7.1:</b> ' + c.failWhy + '. Пары с неисполнимой торговой механикой никогда не попадают в рейтинг шорт-листа.</div>';
 
         el.querySelector('#dossier0').innerHTML =
-          '<div style="background:#10151f;border:1px solid #262e3f;border-radius:10px;padding:12px">' +
+          '<div style="background:var(--surface-inset);border:1px solid var(--line);border-radius:10px;padding:12px">' +
             '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">' +
-              '<div><b style="font-size:15px">' + c.code + '</b> <span style="color:#98a3b6">· ' + c.name + '</span></div>' +
+              '<div><b style="font-size:15px">' + c.code + '</b> <span style="color:var(--muted)">· ' + c.name + '</span></div>' +
               '<div style="color:' + vCol + ';font-weight:700;font-size:13.5px">' + vText + '</div>' +
             '</div>' +
-            '<div style="margin-bottom:8px"><span style="font-size:12.5px;color:#98a3b6">Takeaway-бейджи состояния (§8.2): </span>' + badgePills +
+            '<div style="margin-bottom:8px"><span style="font-size:12.5px;color:var(--muted)">Takeaway-бейджи состояния (§8.2): </span>' + badgePills +
               (gt.passed ? '<span style="float:right;font-size:14px">Композитный скор: <b style="color:' + ME + '">' + f(cs.score) + '</b></span>' : '') +
             '</div>' +
-            '<div style="margin-bottom:8px"><b style="font-size:12.5px;color:#98a3b6">Этап 1 (POOL → SHORTLIST): 5 пороговых гейтов</b>' + gateRows + '</div>' +
+            '<div style="margin-bottom:8px"><b style="font-size:12.5px;color:var(--muted)">Этап 1 (POOL → SHORTLIST): 5 пороговых гейтов</b>' + gateRows + '</div>' +
             compBars +
             (c.failWhy && gt.passed ? '<div class="note ' + (c.verdict === 'BORDERLINE' ? 'warn' : 'bad') + '" style="margin:10px 0 0">' + c.failWhy + '</div>' : '') +
           '</div>';
@@ -316,7 +316,7 @@
           </div>
           <div id="sl3"></div>
           <div id="kpi3" style="margin:10px 0"></div>
-          <div id="svg3" style="display:flex;justify-content:center;background:#10151e;border:1px solid #222a38;border-radius:10px;padding:8px"></div>
+          <div id="svg3" style="display:flex;justify-content:center;background:var(--surface-inset);border:1px solid var(--line);border-radius:10px;padding:8px"></div>
           <div id="alert3" class="note" style="margin-top:10px"></div>
         </div>`;
 
@@ -359,7 +359,7 @@
           const bothIn = chosen.indexOf(e.a) !== -1 && chosen.indexOf(e.b) !== -1;
           const pA = pos[e.a], pB = pos[e.b];
           edgesSvg += '<line x1="' + pA.x.toFixed(1) + '" y1="' + pA.y.toFixed(1) + '" x2="' + pB.x.toFixed(1) + '" y2="' + pB.y.toFixed(1) + '" ' +
-            'stroke="' + (bothIn ? BAD : '#6b7892') + '" stroke-opacity="' + (bothIn ? '0.92' : '0.35') + '" stroke-width="' + (bothIn ? (2.2 + 2.5 * e.r).toFixed(1) : '1.4') + '"/>';
+            'stroke="' + (bothIn ? BAD : 'var(--muted)') + '" stroke-opacity="' + (bothIn ? '0.92' : '0.35') + '" stroke-width="' + (bothIn ? (2.2 + 2.5 * e.r).toFixed(1) : '1.4') + '"/>';
         });
 
         let nodesSvg = '';
@@ -371,7 +371,7 @@
             (isSel ? '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="21" fill="none" stroke="' + GOLD + '" stroke-width="2.6"/>' : '') +
             '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="15" fill="' + colNode + '" fill-opacity="' + (isSel ? '0.95' : '0.35') + '"/>' +
             '<text x="' + pt.x.toFixed(1) + '" y="' + (pt.y + 4).toFixed(1) + '" text-anchor="middle" fill="#0d1117" font-size="10.5" font-weight="700">' + f(p.soloScore, 2) + '</text>' +
-            '<text x="' + pt.x.toFixed(1) + '" y="' + (pt.y + (pt.y < cy ? -23 : 31)).toFixed(1) + '" text-anchor="middle" fill="' + (isSel ? '#eef3fb' : '#8b96ab') + '" font-size="11.5" font-weight="' + (isSel ? '700' : '500') + '">' + p.code + '</text>' +
+            '<text x="' + pt.x.toFixed(1) + '" y="' + (pt.y + (pt.y < cy ? -23 : 31)).toFixed(1) + '" text-anchor="middle" fill="' + (isSel ? 'var(--text)' : 'var(--muted)') + '" font-size="11.5" font-weight="' + (isSel ? '700' : '500') + '">' + p.code + '</text>' +
           '</g>';
         });
 
@@ -445,7 +445,7 @@
           const w = Math.min(100, (r.val / maxBar) * 100);
           return '<div style="margin:5px 0;font-size:12.5px">' +
             '<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>' + r.lbl + '</span><b>' + f(r.val, 3) + '</b></div>' +
-            '<div style="height:9px;background:#1a2230;border-radius:5px;overflow:hidden"><div style="width:' + w.toFixed(1) + '%;height:100%;background:' + r.c + '"></div></div>' +
+            '<div style="height:9px;background:var(--surface-inset);border-radius:5px;overflow:hidden"><div style="width:' + w.toFixed(1) + '%;height:100%;background:' + r.c + '"></div></div>' +
           '</div>';
         }).join('');
 
@@ -457,7 +457,7 @@
             return '<tr' + (win ? ' style="background:rgba(126,224,181,0.13);font-weight:600"' : '') + '>' +
               '<td>' + (win ? '✓ ' : '') + c.code + '</td>' +
               '<td>' + f(c.soloScore) + '</td>' +
-              '<td style="color:' + (win ? ME : (isDup ? BAD : '#d5deef')) + '">+' + f(c.gain, 3) + '</td>' +
+              '<td style="color:' + (win ? ME : (isDup ? BAD : 'var(--text-2)')) + '">+' + f(c.gain, 3) + '</td>' +
               '<td>' + (win ? '<span style="color:' + ME + '">лидер прироста корзины!</span>'
                 : (isDup ? '<span style="color:' + BAD + '">закорочка: дублирует ' + c.cloneOf + ' (ρ=' + f(c.maxR) + ')</span>' : 'ждет следующего шага')) + '</td>' +
             '</tr>';

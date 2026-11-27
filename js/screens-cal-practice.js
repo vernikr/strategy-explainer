@@ -193,7 +193,7 @@
         <div class="viz">
           <h4>Сценарий, режим показа сделок и стоимость ролла</h4>
           <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-          <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="btns" id="modes" style="margin:0 0 10px"></div>
           <div id="rctl"></div>
           <div id="ctl"></div>
@@ -345,7 +345,7 @@
             '<td>' + cal.seriesNames[tr.seriesIn % 5] + (tr.seriesOut !== tr.seriesIn ? ' → <b>' + cal.seriesNames[tr.seriesOut % 5] + '</b>' : '') + '</td>' +
             '<td>' + (tr.rolls ? '<b style="color:' + GOLD + '">' + tr.rolls + '</b>' : '0') + '</td>' +
             '<td>' + (A.REASON[tr.reason] || tr.reason) + '</td>' +
-            '<td>' + col(tr.net, 2) + '</td></tr>').join('') || '<tr><td colspan="7" style="color:#8b95a7">Нет сделок</td></tr>');
+            '<td>' + col(tr.net, 2) + '</td></tr>').join('') || '<tr><td colspan="7" style="color:var(--muted)">Нет сделок</td></tr>');
 
         tl.querySelectorAll('tr.click').forEach((trEl) => trEl.addEventListener('click', () => {
           s6.sel = +trEl.dataset.i;
@@ -373,7 +373,7 @@
             <div class="viz">
               <h4>Сценарий и режим расчёта</h4>
               <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-              <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+              <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
               <div class="btns" id="modes" style="margin:0"></div>
             </div>
             <div class="viz">
@@ -508,12 +508,12 @@
         el.querySelector('#steps').innerHTML = `
           <div class="row"><div class="n">1</div><div>
             <b>Контрактная серия и сырой спред дня ${t + 1}</b>
-            <div style="color:#98a3b6;font-size:14px">Активная пара: <b>«${ex.seriesName}»</b>, до экспирации ближнего фьючерса <b>${ex.daysToExp} дн.</b> (${ex.raw >= 0 ? 'контанго' : 'бэквордация'}).${rollLine}</div>
+            <div style="color:var(--muted);font-size:14px">Активная пара: <b>«${ex.seriesName}»</b>, до экспирации ближнего фьючерса <b>${ex.daysToExp} дн.</b> (${ex.raw >= 0 ? 'контанго' : 'бэквордация'}).${rollLine}</div>
             <div class="v">Ближний = ${f(ex.near)}, Дальний = ${f(ex.far)} → сырой спред = <b>${f(ex.raw)}</b> п.</div>
           </div></div>
           <div class="row"><div class="n">2</div><div>
             <b>Склейка серий и сезонная поправка (режим «${mInfo.name}»)</b>
-            <div style="color:#98a3b6;font-size:14px">${step2Html}</div>
+            <div style="color:var(--muted);font-size:14px">${step2Html}</div>
             <div class="v">Рабочее число для окна = <b>${f(ex.value)}</b> п.</div>
           </div></div>
           <div class="row"><div class="n">3</div><div>
@@ -550,7 +550,7 @@
         <h3 style="margin:0 0 10px">1. Честный эксперимент: 4 сценария × 11 наборов данных × 4 режима</h3>
         <p style="max-width:940px">Настройки входа, выхода и стопа одинаковы для всех четырёх столбцов. Переключайте вкладки сценариев и двигайте ползунок стоимости ролла: видно, когда бесшовный перенос обгоняет выход до экспирации, когда спасает только сезонная норма, а где ломаются все подходы.</p>
         <div class="btns" id="tabs"></div>
-        <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+        <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
         <div id="rctl"></div>
         <div id="ctl"></div>
         <div class="viz" style="margin-top:14px">

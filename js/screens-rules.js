@@ -275,7 +275,7 @@
         const sc = el.querySelector('.scroll'); sc.scrollTop = sc.scrollHeight;
       }
       function row(k, title, text, val) {
-        return '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+        return '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
       }
       draw();
     }

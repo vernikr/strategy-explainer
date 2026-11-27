@@ -64,7 +64,7 @@
         <div class="viz">
           <h4>Выберите рыночную ситуацию вечера</h4>
           <div class="btns" id="b5" style="margin:0 0 8px"></div>
-          <p id="note5" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="note5" style="margin:0 0 10px;color:var(--muted)"></p>
           <h4>Часть А. Обновление трёх режимов по фильтру Гамильтона</h4>
           <table class="t" id="tab5hmm"></table>
           <h4 style="margin-top:14px">Часть Б. Сравнение условной вероятности h₁ = ∂C(u, v)/∂v</h4>
@@ -135,7 +135,7 @@
             <div class="btns" id="sc6"></div>
             <div class="btns" id="sd6"></div>
           </div>
-          <p id="note6" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="note6" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="btns" id="md6" style="margin:0 0 10px"></div>
           <div id="sl6n"></div>
         </div>
@@ -275,8 +275,8 @@
             '<td>' + (tr.dir > 0 ? 'лонг' : 'шорт') + ' · <b>' + pct(tr.size, 0) + '</b></td>' +
             '<td>' + U.sgn(tr.entrySig) + ' → ' + U.sgn(tr.exitSig) + '</td>' +
             '<td>' + col(tr.gross) + '</td><td class="neg">−' + f(tr.cost) + '</td><td><b>' + col(tr.net) + '</b></td>' +
-            '<td><span class="pill ' + (tr.reason === 'stop' ? 'stop' : tr.reason === 'target' ? 'ok' : 'time') + '">' + (A.REASON[tr.reason] || tr.reason) + '</span> <span style="color:#98a3b6;font-size:12px">' + tr.regimeNote + '</span></td></tr>'
-          ).join('') : '<tr><td colspan="8" style="color:#98a3b6">Сделок не было.</td></tr>');
+            '<td><span class="pill ' + (tr.reason === 'stop' ? 'stop' : tr.reason === 'target' ? 'ok' : 'time') + '">' + (A.REASON[tr.reason] || tr.reason) + '</span> <span style="color:var(--muted);font-size:12px">' + tr.regimeNote + '</span></td></tr>'
+          ).join('') : '<tr><td colspan="8" style="color:var(--muted)">Сделок не было.</td></tr>');
       }
       draw6();
     }
@@ -418,10 +418,10 @@
       el.querySelector('#tab8sum').innerHTML =
         '<tr><th>Рыночный сценарий</th>' + MODES.map((m) => '<th>' + m.name + '</th>').join('') + '</tr>' +
         summary.map((row) =>
-          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:#98a3b6;font-size:13px">' + row.sc.note + '</span></td>' +
+          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:var(--muted);font-size:13px">' + row.sc.note + '</span></td>' +
           MODES.map((m) => {
             const st = row.byMode[m.id];
-            return '<td><b>' + col(st.tot, 0) + ' п.</b><br><span style="color:#98a3b6;font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
+            return '<td><b>' + col(st.tot, 0) + ' п.</b><br><span style="color:var(--muted);font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
           }).join('') + '</tr>'
         ).join('');
 

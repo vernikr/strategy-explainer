@@ -12,7 +12,7 @@
     for (let d = 0; d <= 3; d++) if (Math.abs(v * Math.pow(10, d) - Math.round(v * Math.pow(10, d))) < 1e-9) return U.fmt(v, d);
     return U.fmt(v, 3);
   };
-  const prereq = '<div class="note">Здесь предполагается, что вы уже знакомы с <a href="#zscore/1" style="color:#7ee0b5">простым z-score</a> и с <a href="#hedge/2" style="color:#7ee0b5">линейной регрессией из раздела «Динамический хедж»</a>.</div>';
+  const prereq = '<div class="note">Здесь предполагается, что вы уже знакомы с <a href="#zscore/1" style="color:var(--accent)">простым z-score</a> и с <a href="#hedge/2" style="color:var(--accent)">линейной регрессией из раздела «Динамический хедж»</a>.</div>';
 
   /* ---------- 1. Случайное блуждание и «резинка» ---------- */
   const s1 = { rev: 0, seedIdx: 0 };
@@ -151,7 +151,7 @@
         <div class="viz">
           <div class="btns" id="tabs" style="margin:0 0 8px"></div>
           <div class="btns" id="seeds" style="margin:0 0 8px"></div>
-          <p id="explain" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="explain" style="margin:0 0 10px;color:var(--muted)"></p>
           <h4>Цены A и B (обе нестационарны — уходят куда угодно)</h4>
           <div class="legend"><span><i style="background:${C.a}"></i>инструмент A</span><span><i style="background:${C.b}"></i>инструмент B</span></div>
           <div id="c1"></div>
@@ -304,11 +304,11 @@
           const isLeft = mid <= crit;
           const h = Math.round((c / mx) * 110);
           return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:132px" title="τ около ' + f(mid, 2) + ': ' + c + ' пар из 200">' +
-            '<div style="font-size:10px;color:#8b95a7;margin-bottom:2px">' + (c || '') + '</div>' +
-            '<div style="width:82%;height:' + Math.max(c ? 3 : 0, h) + 'px;background:' + (isLeft ? BAD : '#3b4a66') + ';border-radius:3px 3px 0 0"></div>' +
-            '<div style="font-size:10px;color:#8b95a7;margin-top:4px">' + (i % 4 === 0 ? f(lo + i * step, 1) : '') + '</div></div>';
+            '<div style="font-size:10px;color:var(--muted);margin-bottom:2px">' + (c || '') + '</div>' +
+            '<div style="width:82%;height:' + Math.max(c ? 3 : 0, h) + 'px;background:' + (isLeft ? BAD : 'var(--line-strong)') + ';border-radius:3px 3px 0 0"></div>' +
+            '<div style="font-size:10px;color:var(--muted);margin-top:4px">' + (i % 4 === 0 ? f(lo + i * step, 1) : '') + '</div></div>';
         }).join('');
-        el.querySelector('#hist').innerHTML = '<div style="display:flex;align-items:flex-end;border-bottom:1px solid #262e3f;padding:4px 4px 0">' + bars + '</div>';
+        el.querySelector('#hist').innerHTML = '<div style="display:flex;align-items:flex-end;border-bottom:1px solid var(--line);padding:4px 4px 0">' + bars + '</div>';
         const meanTau = taus.reduce((a, b) => a + b, 0) / taus.length;
         const naiveFake = taus.filter((v) => v <= -2).length;
         const egFake = taus.filter((v) => v <= crit).length;
@@ -386,7 +386,7 @@
         }));
       }
 
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
 
       function draw() {
         if (s4.b.some(Number.isNaN) || s4.a.some(Number.isNaN)) {

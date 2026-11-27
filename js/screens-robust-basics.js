@@ -7,11 +7,11 @@
   const SIM = '#f5a65b', RB = '#7ee0b5';
   const f = (v, d) => U.fmt(v, d === undefined ? 2 : d);
   const fi = (v) => f(v, Number.isInteger(v) ? 0 : 2);
-  const chip = (v, o) => '<span style="display:inline-block;padding:4px 9px;margin:2px;border-radius:6px;background:#232a3b;font-variant-numeric:tabular-nums;' +
+  const chip = (v, o) => '<span style="display:inline-block;padding:4px 9px;margin:2px;border-radius:6px;background:var(--panel-2);font-variant-numeric:tabular-nums;' +
     (o && o.mid ? 'background:#7ee0b522;outline:1px solid ' + RB + ';' : '') + (o && o.bad ? 'color:#ff6b6b;' : '') + '">' + fi(v) + '</span>';
   const midIdx = (len) => (len % 2 ? [len >> 1] : [len / 2 - 1, len / 2]);
 
-  const prereq = '<div class="note">Если слова «спред», «среднее», «σ» и «z-score» вам не знакомы, сначала прочитайте <a href="#zscore/1" style="color:#7ee0b5">разбор простого z-score</a>: здесь он считается известным.</div>';
+  const prereq = '<div class="note">Если слова «спред», «среднее», «σ» и «z-score» вам не знакомы, сначала прочитайте <a href="#zscore/1" style="color:var(--accent)">разбор простого z-score</a>: здесь он считается известным.</div>';
 
   /* ---------- 1. Проблема: выбросы обманывают среднее и σ ---------- */
   const SPIKE_AT = 140;
@@ -112,7 +112,7 @@
           <div class="calc-grid" id="nums"></div>
           <div class="btns"><button class="b" id="add">+ число</button><button class="b" id="del">− число</button></div>
           <div class="ctl" style="margin-top:8px"><label><span>Сколько чисел заменить выбросами, k</span><b id="kv"></b></label><input type="range" id="kk" min="0" step="1"></div>
-          <p style="margin:10px 0 2px;color:#98a3b6;font-size:14px">По возрастанию (серединное выделено, выбросы красные):</p><div id="sorted"></div>
+          <p style="margin:10px 0 2px;color:var(--muted);font-size:14px">По возрастанию (серединное выделено, выбросы красные):</p><div id="sorted"></div>
           <div class="kpis" id="kp"></div><div class="note" id="read"></div></div>
         <div class="viz"><h4>Реальный спред: скользящее среднее и скользящая медиана</h4>
           <div class="legend"><span><i style="background:${C.spread}"></i>спред</span><span><i style="background:${SIM}"></i>среднее окна</span><span><i style="background:${RB}"></i>медиана окна</span></div><div id="c"></div><div id="ctl"></div>
@@ -217,11 +217,11 @@
         const x = mad.x, ex = E.explainRobust(x, x.length, x.length - 1);
         const len = x.length, mid = midIdx(len);
         const mean = x.reduce((s, v) => s + v, 0) / len, sd = Math.sqrt(x.reduce((s, v) => s + (v - mean) * (v - mean), 0) / len);
-        const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v" style="display:block;width:fit-content">' + val + '</div>' : '') + '</div></div>';
-        calcEl.innerHTML = '<p style="margin:12px 0 4px;color:#98a3b6;font-size:14px">Числа по возрастанию:</p>' + ex.sorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
+        const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v" style="display:block;width:fit-content">' + val + '</div>' : '') + '</div></div>';
+        calcEl.innerHTML = '<p style="margin:12px 0 4px;color:var(--muted);font-size:14px">Числа по возрастанию:</p>' + ex.sorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
           '<table class="t" style="margin-top:10px"><tr><th>Число x</th><th>x − медиана</th><th>Расстояние |x − медиана|</th></tr>' +
           ex.rows.map((r) => '<tr><td>' + fi(r.value) + '</td><td>' + U.sgn(r.dev, 2) + '</td><td>' + f(r.abs) + '</td></tr>').join('') + '</table>' +
-          '<p style="margin:10px 0 4px;color:#98a3b6;font-size:14px">Расстояния по возрастанию:</p>' + ex.absSorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
+          '<p style="margin:10px 0 4px;color:var(--muted);font-size:14px">Расстояния по возрастанию:</p>' + ex.absSorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
           '<div class="calc-steps" style="margin-top:10px">' +
           row(1, 'Медиана чисел', len % 2 ? 'Нечётное количество: берём серединное.' : 'Чётное количество: среднее двух серединных.', f(ex.median)) +
           row(2, 'MAD', 'Медиана расстояний (нижний ряд выше).', f(ex.mad)) +
@@ -284,15 +284,15 @@
         <div class="viz"><h4>То же на реальных учебных данных</h4><p class="cap">Медиана и коридор ±1 σ<sub>р</sub>, ±2 σ<sub>р</sub>.</p>
           <div class="legend"><span><i style="background:${C.spread}"></i>спред</span><span><i style="background:${C.mean}"></i>медиана</span><span><i style="background:#5aa9ff"></i>± σ<sub>р</sub></span><span><i style="background:#f5a65b"></i>± 2σ<sub>р</sub></span></div><div id="ch"></div><div id="ctl"></div></div>`;
       const chart = A.mkChart(el.querySelector('#ch'), 250, { tip: (i) => { const r = E.robust(A.data().spread, A.state.params.n); return r.mean[i] === null ? null : '<b>День ' + (i + 1) + '</b><br>Спред: ' + f(A.data().spread[i]) + '<br>Медиана: ' + f(r.mean[i]) + ' · σр: ' + f(r.std[i]) + '<br>z: ' + f(r.z[i]); } });
-      function step(k, title, text, val) { return '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div><div class="v" style="display:block;width:fit-content">' + val + '</div></div></div>'; }
+      function step(k, title, text, val) { return '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div><div class="v" style="display:block;width:fit-content">' + val + '</div></div></div>'; }
       function draw() {
         const x = hand.x, len = x.length, t = len - 1, ex = E.explainRobust(x, len, t), mid = midIdx(len);
         const mean = x.reduce((s, v) => s + v, 0) / len, sd = Math.sqrt(x.reduce((s, v) => s + (v - mean) * (v - mean), 0) / len);
         el.querySelector('#calc').innerHTML =
-          '<p style="margin:12px 0 4px;color:#98a3b6;font-size:14px">Числа по возрастанию:</p>' + ex.sorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
+          '<p style="margin:12px 0 4px;color:var(--muted);font-size:14px">Числа по возрастанию:</p>' + ex.sorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
           '<table class="t" style="margin-top:10px"><tr><th>День</th><th>Спред x</th><th>x − M</th><th>d = |x − M|</th></tr>' +
           ex.rows.map((r, i) => '<tr' + (i === t ? ' class="sel"' : '') + '><td>' + (i === t ? 'сегодня' : (t - i) + ' дн. назад') + '</td><td>' + fi(r.value) + '</td><td>' + U.sgn(r.dev, 2) + '</td><td>' + f(r.abs) + '</td></tr>').join('') + '</table>' +
-          '<p style="margin:10px 0 4px;color:#98a3b6;font-size:14px">Расстояния d по возрастанию:</p>' + ex.absSorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
+          '<p style="margin:10px 0 4px;color:var(--muted);font-size:14px">Расстояния d по возрастанию:</p>' + ex.absSorted.map((v, p) => chip(v, { mid: mid.indexOf(p) >= 0 })).join('') +
           '<div class="calc-steps" style="margin-top:10px">' +
           step(1, 'Медиана M', 'Серединное в верхнем ряду.', 'M = ' + f(ex.median)) +
           step(2, 'MAD', 'Серединное в нижнем ряду.', 'MAD = ' + f(ex.mad)) +

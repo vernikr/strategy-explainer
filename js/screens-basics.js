@@ -101,7 +101,7 @@
           '<tr><td>Нога B (' + (dir === 1 ? 'продали' : 'купили') + ')</td><td>' + U.fmt(bin, 1) + '</td><td>' + U.fmt(bout, 1) + '</td><td>' + col(legB) + '</td></tr>' +
           '<tr><td>Спред A − B</td><td>' + U.fmt(sin, 1) + '</td><td>' + U.fmt(sout, 1) + '</td><td></td></tr></table>' +
           '<p style="margin:10px 0 4px">Сумма двух ног: <span class="big">' + col(legA + legB) + '</span> пунктов</p>' +
-          '<p style="margin:0;color:#98a3b6;font-size:14px">Проверка по формуле: ' + (dir === 1 ? '+1' : '−1') + ' × (' + U.fmt(sout, 1) + ' − ' + U.fmt(sin, 1) + ') = ' + U.sgn(dir * (sout - sin), 1) + '. Совпадает с суммой ног.</p>';
+          '<p style="margin:0;color:var(--muted);font-size:14px">Проверка по формуле: ' + (dir === 1 ? '+1' : '−1') + ' × (' + U.fmt(sout, 1) + ' − ' + U.fmt(sin, 1) + ') = ' + U.sgn(dir * (sout - sin), 1) + '. Совпадает с суммой ног.</p>';
       }
       el.addEventListener('input', calc);
       calc();

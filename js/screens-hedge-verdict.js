@@ -37,7 +37,7 @@
 
         <h3 style="margin:28px 0 10px">1. Эксперимент: четыре сценария, 11 наборов данных, три способа</h3>
         <p style="max-width:1000px">Для каждого сценария генерируем 11 разных наборов цен (разные «случайные истории» с одними и теми же правилами) и торгуем каждый тремя способами: <b style="color:${SIM}">простой спред A − B</b> (k = 1 всегда), <b style="color:${ME}">хедж с дробным k</b> (как будто можно купить 1,43 контракта) и <b style="color:${RD}">хедж в целых контрактах</b> (число контрактов A задаётся ползунком). Правила входа и выхода одинаковые. Сравниваем три вещи: сколько было сделок, итог в пунктах и ${T('drawdown', 'максимальную просадку')} — самое глубокое падение счёта от предыдущего максимума.</p>
-        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 12px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p><div id="ctl"></div><div id="sum" class="note" style="margin-top:10px"></div><div class="scroll" style="max-height:none;margin-top:12px"><table class="t" id="tab"></table></div></div>
+        <div class="viz"><div class="btns" id="tabs" style="margin:0 0 12px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p><div id="ctl"></div><div id="sum" class="note" style="margin-top:10px"></div><div class="scroll" style="max-height:none;margin-top:12px"><table class="t" id="tab"></table></div></div>
 
         <h3 style="margin:30px 0 10px">2. Почему при β = 1 хедж проигрывает</h3>
         <div class="cols"><div class="text">

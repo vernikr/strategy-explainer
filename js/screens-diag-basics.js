@@ -203,7 +203,7 @@
       <h3>Почему ${T('adf_kpss_matrix', 'ADF и KPSS работают в паре')}</h3>
       <p>Два теста смотрят на ряд с противоположных берегов:</p>
       <ul>
-        <li><b>ADF</b> (расширенный лагами тест Дики — Фуллера) по умолчанию считает ряд <i>случайным блужданием</i> и ищет улики в пользу возврата: для <b>заранее фиксированного ряда</b> нужно <code>τ ≤ −2,88</code>, а если наклон <code>β</code> подбирался регрессией на этом же куске истории — строгий порог Маккиннона <code>τ ≤ −3,34</code> (см. <a href="#coint/3" style="color:#7ee0b5">главу «Коинтеграция»</a>)!</li>
+        <li><b>ADF</b> (расширенный лагами тест Дики — Фуллера) по умолчанию считает ряд <i>случайным блужданием</i> и ищет улики в пользу возврата: для <b>заранее фиксированного ряда</b> нужно <code>τ ≤ −2,88</code>, а если наклон <code>β</code> подбирался регрессией на этом же куске истории — строгий порог Маккиннона <code>τ ≤ −3,34</code> (см. <a href="#coint/3" style="color:var(--accent)">главу «Коинтеграция»</a>)!</li>
         <li><b>${T('kpss_test', 'Зеркальный тест KPSS')}</b> по умолчанию считает ряд <i>стационарным</i> и ищет улики развала или дрейфа (нужно <code>KPSS ≤ 0,463</code>).</li>
       </ul>
       <p>Третий независимый взгляд — ${T('hurst_exp', 'показатель Хёрста')} <code>H ∈ (0, 1)</code>: при <code>H &lt; 0,5</code> ряд тянется назад к среднему, при <code>H ≈ 0,5</code> блуждает наугад, а при <code>H &gt; 0,5</code> разгоняется по тренду (не путайте с буквой <code>H</code> в главе ML, где <code>H</code> обозначает горизонт удержания в днях!).</p>
@@ -263,13 +263,13 @@
             '<div class="kpi"><div class="v" style="color:' + (sm.hurst < 0.46 ? ME : BAD) + '">' + f(sm.hurst, 2) + '</div><div class="l">Показатель Хёрста H</div><div class="e">' + (sm.hurst < 0.46 ? 'возвратный (< 0,5)' : 'блуждание / тренд') + '</div></div>' +
           '</div>';
 
-        const cell = (vKey, title, desc) => '<td style="' + (sm.verdict === vKey ? 'background:#1e293b;outline:2px solid ' + (vKey === 'confirmed' ? ME : vKey === 'random_walk' ? BAD : GOLD) : 'opacity:0.65') + '"><b>' + title + '</b><br><span style="font-size:13px;color:#98a3b6">' + desc + '</span></td>';
+        const cell = (vKey, title, desc) => '<td style="' + (sm.verdict === vKey ? 'background:var(--panel-2);outline:2px solid ' + (vKey === 'confirmed' ? ME : vKey === 'random_walk' ? BAD : GOLD) : 'opacity:0.65') + '"><b>' + title + '</b><br><span style="font-size:13px;color:var(--muted)">' + desc + '</span></td>';
         el.querySelector('#mat3').innerHTML =
           '<tr><th>Матрица решений</th><th>KPSS ≤ 0,463 (уровень ровный)</th><th>KPSS &gt; 0,463 (уровень уплывает)</th></tr>' +
-          '<tr><td><b>ADF τ ≤ порога</b><br><span style="font-size:13px;color:#98a3b6">есть возврат</span></td>' +
+          '<tr><td><b>ADF τ ≤ порога</b><br><span style="font-size:13px;color:var(--muted)">есть возврат</span></td>' +
             cell('confirmed', '✓ Подтверждённая стационарность', 'Оба теста за нас — зелёный свет для торговли') +
             cell('structural_break', '⚠ Скрытый сдвиг / ступенька', 'Локально дёргается назад, но средний уровень сполз!') + '</tr>' +
-          '<tr><td><b>ADF τ &gt; порога</b><br><span style="font-size:13px;color:#98a3b6">нет сил отвергнуть RW</span></td>' +
+          '<tr><td><b>ADF τ &gt; порога</b><br><span style="font-size:13px;color:var(--muted)">нет сил отвергнуть RW</span></td>' +
             cell('low_power', '◔ Мало данных / медленный возврат', 'KPSS спокоен, но выборка слишком коротка для ADF') +
             cell('random_walk', '✗ Чистое блуждание / тренд', 'Оба теста против — торговать возврат запрещено!') + '</tr>';
 
@@ -289,7 +289,7 @@
             const barCol = idx <= 1 ? ME : idx <= 3 ? GOLD : BAD;
             return '<div style="display:grid;grid-template-columns:150px 1fr 56px;gap:10px;align-items:center;margin:5px 0">' +
               '<span style="font-size:14px">' + b.lbl + '</span>' +
-              '<div style="background:#10151f;border-radius:5px;height:14px;overflow:hidden"><div style="width:' + pct + '%;height:100%;background:' + barCol + '"></div></div>' +
+              '<div style="background:var(--surface-inset);border-radius:5px;height:14px;overflow:hidden"><div style="width:' + pct + '%;height:100%;background:' + barCol + '"></div></div>' +
               '<span style="font-size:14px;text-align:right">' + counts[idx] + ' ок.</span></div>';
           }).join('');
       }

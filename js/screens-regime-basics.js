@@ -185,7 +185,7 @@
         const gt = E.regimeGate(probs);
 
         el.querySelector('#bar2').innerHTML =
-          '<div style="display:flex;height:28px;border-radius:8px;overflow:hidden;border:1px solid #2a3242;font-size:13px;font-weight:600;color:#0e1218">' +
+          '<div style="display:flex;height:28px;border-radius:8px;overflow:hidden;border:1px solid var(--line);font-size:13px;font-weight:600;color:#0e1218">' +
             '<div style="width:' + (s2.pRev * 100).toFixed(1) + '%;background:' + ME + ';display:flex;align-items:center;justify-content:center">' + (s2.pRev >= 0.14 ? 'Возврат ' + pct(s2.pRev, 0) : '') + '</div>' +
             '<div style="width:' + (s2.pStorm * 100).toFixed(1) + '%;background:' + SIM + ';display:flex;align-items:center;justify-content:center">' + (s2.pStorm >= 0.14 ? 'Шторм ' + pct(s2.pStorm, 0) : '') + '</div>' +
             '<div style="width:' + (pBrk * 100).toFixed(1) + '%;background:' + BAD + ';display:flex;align-items:center;justify-content:center">' + (pBrk >= 0.14 ? 'Распад ' + pct(pBrk, 0) : '') + '</div>' +
@@ -242,9 +242,9 @@
             <button class="b" data-sp="norm">Шкала стандартных отклонений (X, Y)</button>
           </div>
           <div id="sl3"></div>
-          <p id="note3" style="margin:8px 0;color:#98a3b6"></p>
+          <p id="note3" style="margin:8px 0;color:var(--muted)"></p>
           <div id="kpi3" style="margin-bottom:10px"></div>
-          <canvas id="cv3" style="width:100%;max-width:520px;height:310px;display:block;margin:0 auto;border-radius:8px;background:#0e1218;border:1px solid #222938"></canvas>
+          <canvas id="cv3" style="width:100%;max-width:520px;height:310px;display:block;margin:0 auto;border-radius:8px;background:var(--surface-inset);border:1px solid var(--line)"></canvas>
         </div>`;
 
       const fEl = el.querySelector('#f3'), spEl = el.querySelector('#sp3');
@@ -298,7 +298,7 @@
         ctx.fillStyle = 'rgba(126, 224, 181, 0.10)';
         ctx.fillRect(pad + pw - boxW, pad, boxW, boxH);
 
-        ctx.strokeStyle = '#263042';
+        ctx.strokeStyle = U.COLORS.grid;
         ctx.strokeRect(pad, pad, pw, ph);
         ctx.beginPath();
         ctx.setLineDash([4, 4]);
@@ -317,8 +317,8 @@
           ctx.fill();
         });
 
-        ctx.fillStyle = '#98a3b6';
-        ctx.font = '12px system-ui, sans-serif';
+        ctx.fillStyle = U.COLORS.axis;
+        ctx.font = U.COLORS.font || '12px system-ui, sans-serif';
         ctx.fillText(s3.space === 'unit' ? 'Ранг ноги A (u: 0 → 1)' : 'Шок ноги A (−3σ → +3σ)', pad + pw / 2 - 65, h - 8);
         ctx.fillStyle = BAD;
         ctx.fillText('Обвал (0,0)', pad + 6, pad + ph - 6);

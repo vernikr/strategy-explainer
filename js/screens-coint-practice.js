@@ -140,11 +140,11 @@
         el.querySelector('#tab').innerHTML =
           '<tr><th>Пара (истинная природа — скрыта в жизни)</th><th>R²</th><th>τ</th><th>T½</th><th>Сито</th><th>Будущее, п.</th></tr>' +
           rowsData.map((r, i) => '<tr class="click' + (i === s5.sel ? ' sel' : '') + '" data-i="' + i + '">' +
-            '<td><b>' + r.p.name + '</b><br><span style="font-size:12px;color:#8b95a7">' + r.p.kindLabel + '</span></td>' +
+            '<td><b>' + r.p.name + '</b><br><span style="font-size:12px;color:var(--muted)">' + r.p.kindLabel + '</span></td>' +
             '<td>' + f(r.ct.r2, 2) + '</td>' +
             '<td class="' + (r.ct.passed ? 'pos' : '') + '">' + f(r.ct.tau, 2) + '</td>' +
             '<td>' + (r.ct.halfLife === null || r.ct.halfLife > 99 ? '∞' : f(r.ct.halfLife, 1)) + '</td>' +
-            '<td>' + (r.picked ? '<span class="pill go">берём</span>' : '<span style="color:#8b95a7">отсев</span>') + '</td>' +
+            '<td>' + (r.picked ? '<span class="pill go">берём</span>' : '<span style="color:var(--muted)">отсев</span>') + '</td>' +
             '<td>' + col(r.bt.metrics.total, 1) + '</td></tr>').join('');
 
         el.querySelector('#tab').querySelectorAll('tr.click').forEach((trEl) => trEl.addEventListener('click', () => {
@@ -205,7 +205,7 @@
         <div class="viz">
           <h4>Сценарий и параметры светофора</h4>
           <div class="btns" id="tabs" style="margin:0 0 8px"></div>
-          <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <div id="cctl"></div>
           <div id="ctl"></div>
         </div>
@@ -332,7 +332,7 @@
       el.innerHTML = `
         <div style="display:grid;grid-template-columns:560px 1fr;gap:28px;align-items:start">
           <div>
-            <div class="viz"><h4>Сценарий данных</h4><div class="btns" id="tabs" style="margin:0 0 8px"></div><p id="snote" style="margin:0;color:#98a3b6"></p></div>
+            <div class="viz"><h4>Сценарий данных</h4><div class="btns" id="tabs" style="margin:0 0 8px"></div><p id="snote" style="margin:0;color:var(--muted)"></p></div>
             <div class="viz"><h4>Выбор дня: <span id="dayv"></span></h4><input type="range" id="day" style="margin-top:8px">
               <div class="btns">
                 <button class="b" id="bp">◀ День назад</button>
@@ -396,7 +396,7 @@
         }, 350);
       });
 
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
 
       function draw() {
         tabs.querySelectorAll('button').forEach((b, k) => b.classList.toggle('on', k === s7.scn));
@@ -487,7 +487,7 @@
         <h3 style="margin:26px 0 10px">1. Эксперимент: четыре сценария, 11 наборов, три подхода</h3>
         <div class="viz">
           <div class="btns" id="tabs" style="margin:0 0 10px"></div>
-          <p id="snote" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="snote" style="margin:0 0 10px;color:var(--muted)"></p>
           <div id="cctl"></div>
           <div id="ctl"></div>
           <div class="note" id="sum" style="margin-top:10px"></div>

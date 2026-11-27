@@ -74,13 +74,13 @@
           const loP = it.c.lo * 100, wP = (it.c.hi - it.c.lo) * 100, ptP = it.c.point * 100, efP = it.c.effectiveScore * 100;
           return '<div style="margin:10px 0">' +
             '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><b>' + it.name + '</b><span>интервал [' + f(it.c.lo) + ' – ' + f(it.c.hi) + '] → эфф. скор <b>' + f(it.c.effectiveScore, 3) + '</b></span></div>' +
-            '<div style="position:relative;height:20px;background:#161d29;border-radius:6px;border:1px solid #263044">' +
+            '<div style="position:relative;height:20px;background:var(--surface-inset);border-radius:6px;border:1px solid var(--line)">' +
               '<div style="position:absolute;left:' + loP.toFixed(1) + '%;width:' + Math.max(1, wP).toFixed(1) + '%;top:3px;bottom:3px;background:' + it.col + '44;border:1px solid ' + it.col + ';border-radius:4px"></div>' +
               '<div title="Точечный скор" style="position:absolute;left:' + ptP.toFixed(1) + '%;top:0;bottom:0;width:3px;background:#fff"></div>' +
               '<div title="Эффективный скор с downweighting" style="position:absolute;left:' + efP.toFixed(1) + '%;top:2px;bottom:2px;width:4px;background:' + GOLD + ';border-radius:2px"></div>' +
             '</div>' +
           '</div>';
-        }).join('') + '<div style="font-size:12px;color:#8b96ab">Белая риска — сырой точечный скор, цветная полоса — конформный интервал покрытия, золотая риска — скор после штрафа за неопределённость.</div></div>';
+        }).join('') + '<div style="font-size:12px;color:var(--muted)">Белая риска — сырой точечный скор, цветная полоса — конформный интервал покрытия, золотая риска — скор после штрафа за неопределённость.</div></div>';
       }
       draw5();
     }

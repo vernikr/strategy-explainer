@@ -77,11 +77,11 @@
         <li>z ушёл за стоп → закрыть с убытком;</li>
         <li>одна позиция за раз.</li>
       </ol>
-      <p>Подробности каждого правила — на <a href="#zscore/5" style="color:#7ee0b5">экране «Правила» простого z-score</a>. Результат сделки считается так же: направление × (спред на выходе − спред на входе) − издержки.</p>
+      <p>Подробности каждого правила — на <a href="#zscore/5" style="color:var(--accent)">экране «Правила» простого z-score</a>. Результат сделки считается так же: направление × (спред на выходе − спред на входе) − издержки.</p>
       <h3>Что меняется</h3>
       <p>Меняются моменты, когда z пересекает пороги: среднее и σ у EWMA другие, поэтому и сигналы появляются в другие дни. Справа обе стратегии работают с <b>одними и теми же настройками</b> на одних и тех же данных.</p>
       <div class="note warn"><b>Помните про разные шкалы.</b> Как показал прошлый экран, одинаковые пороги дают разную частоту сигналов. Если у EWMA мало сделок, это не «плохая» или «хорошая» стратегия, а повод посмотреть на порог.</div>
-      <div class="note bad"><b>Риски остаются теми же.</b> EWMA не защищает от разрыва связи, издержек и подгонки под прошлое, см. <a href="#zscore/9" style="color:#7ee0b5">экран «Риски и ловушки»</a>.</div>`,
+      <div class="note bad"><b>Риски остаются теми же.</b> EWMA не защищает от разрыва связи, издержек и подгонки под прошлое, см. <a href="#zscore/9" style="color:var(--accent)">экран «Риски и ловушки»</a>.</div>`,
     mount(el) {
       el.innerHTML = `
         <div class="viz"><h4>Z-score EWMA и сделки</h4>
@@ -150,7 +150,7 @@
         ev.target.textContent = '❚❚ Пауза';
         window.__stepTimer = setInterval(() => { if (t >= n - 1) { clearInterval(window.__stepTimer); window.__stepTimer = null; ev.target.textContent = '▶ Автопроигрывание'; return; } t++; draw(); }, 350);
       });
-      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:#98a3b6;font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
+      const row = (k, title, text, val) => '<div class="row"><div class="n">' + k + '</div><div><b>' + title + '</b><div style="color:var(--muted);font-size:14px">' + text + '</div>' + (val ? '<div class="v">' + val + '</div>' : '') + '</div></div>';
       function draw() {
         const p = A.state.params, b = bt(), f = (v, k) => U.fmt(v, k === undefined ? 3 : k);
         if (t < p.n - 1) t = p.n - 1;
@@ -195,7 +195,7 @@
     mount(el) {
       el.innerHTML = `
         <div class="note warn"><b>Как читать.</b> Сценарии придуманы мной на синтетических данных и показывают механику, а не доказывают превосходство. Итог зависит от настроек: подвигайте порог входа и N и посмотрите, как меняется картина.</div>
-        <div class="viz" style="margin-top:16px"><div class="btns" id="tabs" style="margin:0 0 12px"></div><p id="snote" style="margin:0 0 10px;color:#98a3b6"></p><div id="ctl"></div><div id="sum" class="note" style="margin-top:10px"></div><div class="scroll" style="max-height:none;margin-top:12px"><table class="t" id="tab"></table></div></div>
+        <div class="viz" style="margin-top:16px"><div class="btns" id="tabs" style="margin:0 0 12px"></div><p id="snote" style="margin:0 0 10px;color:var(--muted)"></p><div id="ctl"></div><div id="sum" class="note" style="margin-top:10px"></div><div class="scroll" style="max-height:none;margin-top:12px"><table class="t" id="tab"></table></div></div>
         <h3 style="margin:30px 0 14px">Итоги простыми словами</h3>
         <div class="cards" id="cards"></div>`;
       let cur = 0;

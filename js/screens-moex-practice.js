@@ -114,7 +114,7 @@
             <div class="btns" id="sc6"></div>
             <div class="btns" id="sd6"></div>
           </div>
-          <p id="desc6" style="margin:0 0 10px;color:#98a3b6"></p>
+          <p id="desc6" style="margin:0 0 10px;color:var(--muted)"></p>
           <div class="btns" id="md6" style="margin:0 0 12px"></div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px" id="sl6">
             <div id="sl6n"></div><div id="sl6in"></div><div id="sl6out"></div><div id="sl6cap"></div>
@@ -220,7 +220,7 @@
             '<td>' + col(tr.priceVm) + '</td><td>' + col(tr.divComp) + '</td><td>' + col(tr.swapFlow) + '</td>' +
             '<td class="neg">−' + f(tr.cost) + '</td><td><b>' + col(tr.net) + '</b></td>' +
             '<td><span class="pill ' + (tr.reason === 'margin' || tr.reason === 'stop' ? 'stop' : tr.reason === 'exit' ? 'ok' : 'time') + '">' + A.REASON[tr.reason] + '</span></td></tr>'
-          ).join('') : '<tr><td colspan="9" style="color:#98a3b6">При таких порогах сделок не открылось.</td></tr>');
+          ).join('') : '<tr><td colspan="9" style="color:var(--muted)">При таких порогах сделок не открылось.</td></tr>');
       }
       draw6();
     }
@@ -303,7 +303,7 @@
             '<tr><th>Величина</th><th>Значение</th><th>Пояснение</th></tr>' +
             '<tr><td>Квартальный SP / Вечный SP</td><td><b>' + f(ex.spQuart) + '</b> / <b>' + f(ex.spPerp) + '</b></td><td>расчётные цены 23:50</td></tr>' +
             '<tr><td>Сырой спред по клирингу SP</td><td><b>' + U.sgn(ex.spRaw) + ' п.</b></td><td>SP_кварт − SP_вечный</td></tr>' +
-            '<tr><td>Последняя сделка 23:49 (ласт)</td><td style="color:' + (Math.abs(ex.lastRaw - ex.spRaw) > 0.8 ? BAD : '#cdd7e8') + '">' + U.sgn(ex.lastRaw) + ' п.</td><td>отклонение от SP: ' + U.sgn(ex.lastRaw - ex.spRaw) + ' п.</td></tr>' +
+            '<tr><td>Последняя сделка 23:49 (ласт)</td><td style="color:' + (Math.abs(ex.lastRaw - ex.spRaw) > 0.8 ? BAD : 'var(--text-2)') + '">' + U.sgn(ex.lastRaw) + ' п.</td><td>отклонение от SP: ' + U.sgn(ex.lastRaw - ex.spRaw) + ' п.</td></tr>' +
             '<tr><td>Справедливый перенос (базис)</td><td style="color:' + GOLD + '">' + U.sgn(ex.fairBasis) + ' п.</td><td>ставка до экспирации минус ожид. дивиденд</td></tr>' +
             '<tr><td><b>Очищенный спред (сигнал)</b></td><td><b style="color:' + ME + '">' + U.sgn(ex.cleanSpread) + ' п.</b></td><td>SP_сырой − Справедливый перенос</td></tr>' +
             '<tr><td>SwapRate вечного за этот клиринг</td><td>' + col(-ex.swapPaid) + ' п.</td><td>на 1 лонг вечного (' + ex.carryDays + ' календ. дн.)</td></tr>' +
@@ -377,11 +377,11 @@
       el.querySelector('#tab8sum').innerHTML =
         '<tr><th>Сценарий на срочном рынке MOEX</th>' + MODES.map((m) => '<th>' + m.name + '</th>').join('') + '</tr>' +
         summary.map((row) =>
-          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:#98a3b6;font-size:13px">' + row.sc.note + '</span></td>' +
+          '<tr><td><b>' + row.sc.name + '</b><br><span style="color:var(--muted);font-size:13px">' + row.sc.note + '</span></td>' +
           MODES.map((m) => {
             const st = row.byMode[m.id];
             const mcNote = st.mc > 0 ? ' <span class="pill stop" style="font-size:12px">MC: ' + st.mc + '</span>' : '';
-            return '<td><b>' + col(st.tot, 0) + ' п.</b>' + mcNote + '<br><span style="color:#98a3b6;font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
+            return '<td><b>' + col(st.tot, 0) + ' п.</b>' + mcNote + '<br><span style="color:var(--muted);font-size:13px">' + st.trades + ' сд. · ср. DD −' + f(st.ddSum / SEEDS8.length, 1) + '</span></td>';
           }).join('') + '</tr>'
         ).join('');
 

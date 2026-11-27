@@ -208,23 +208,23 @@
         const pCross = (s2.dWorld * s2.dFx) / 100;
 
         el.querySelector('#svg2').innerHTML = `
-          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:#10151f;border:1px solid #262e3f;border-radius:10px;display:block">
-            <rect x="${ox}" y="${oy}" width="${bw0}" height="${bh0}" fill="#1d2638" stroke="#5aa9ff" stroke-width="1.5"/>
+          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:var(--surface-inset);border:1px solid var(--line);border-radius:10px;display:block">
+            <rect x="${ox}" y="${oy}" width="${bw0}" height="${bh0}" fill="var(--panel-2)" stroke="#5aa9ff" stroke-width="1.5"/>
             <rect x="${ox}" y="${oy}" width="${bw1}" height="${bh1}" fill="none" stroke="#ffd166" stroke-width="2" stroke-dasharray="6,4"/>
             ${s2.dWorld !== 0 ? `<rect x="${s2.dWorld > 0 ? ox + bw0 : ox + bw1}" y="${oy}" width="${Math.abs(bw1 - bw0)}" height="${Math.min(bh0, bh1)}" fill="#5aa9ff44"/>` : ''}
             ${s2.dFx !== 0 ? `<rect x="${ox}" y="${s2.dFx > 0 ? oy + bh0 : oy + bh1}" width="${Math.min(bw0, bw1)}" height="${Math.abs(bh1 - bh0)}" fill="#f5a65b55"/>` : ''}
             ${s2.dWorld !== 0 && s2.dFx !== 0 ? `<rect x="${s2.dWorld > 0 ? ox + bw0 : ox + bw1}" y="${s2.dFx > 0 ? oy + bh0 : oy + bh1}" width="${Math.abs(bw1 - bw0)}" height="${Math.abs(bh1 - bh0)}" fill="#c9b6ff66"/>` : ''}
-            <text x="${ox + 10}" y="${oy + 22}" fill="#e4e9f2" font-size="12.5" font-weight="600">База: 100 $ × 90 ₽/$ = 90,0 п.</text>
+            <text x="${ox + 10}" y="${oy + 22}" fill="var(--text)" font-size="12.5" font-weight="600">База: 100 $ × 90 ₽/$ = 90,0 п.</text>
             <text x="${ox + 10}" y="${oy + 42}" fill="#5aa9ff" font-size="12">Синяя полоса (ΔЦена·Курс₀): ${U.sgn(pPrice, 2)} п.</text>
             <text x="${ox + 10}" y="${oy + 60}" fill="#f5a65b" font-size="12">Оранжевая полоса (Цена₀·ΔКурс): ${U.sgn(pRate, 2)} п. — голый FX-риск без 3-й ноги!</text>
             <text x="${ox + 10}" y="${oy + 78}" fill="#c9b6ff" font-size="12">Уголок (ΔЦена·ΔКурс): ${U.sgn(pCross, 2)} п.</text>
-            <text x="${ox}" y="${H - 8}" fill="#98a3b6" font-size="11.5">Ширина = цена в $ (${w0} → ${w1} $) · Высота = курс (${fx0} → ${fx1} ₽/$) · Жёлтый пунктир = новый паритет ${f(par1, 2)} п.</text>
+            <text x="${ox}" y="${H - 8}" fill="var(--muted)" font-size="11.5">Ширина = цена в $ (${w0} → ${w1} $) · Высота = курс (${fx0} → ${fx1} ₽/$) · Жёлтый пунктир = новый паритет ${f(par1, 2)} п.</text>
           </svg>`;
 
         el.querySelector('#tab2').innerHTML =
           '<tr><th>Нога сделки</th><th>Вход → Выход</th><th>Результат, п. (по 100 ₽)</th></tr>' +
           '<tr><td>1. Внутренняя нога (₽)</td><td>' + f(dom0) + ' → ' + f(dom1) + ' п.</td><td>' + col(pnlDom) + '</td></tr>' +
-          '<tr><td>2. Зарубежная нога ($ → ₽ по ' + fx1 + ' ₽/$)</td><td>' + w0 + ' → ' + w1 + ' $ ' + (crossOnly !== 0 ? '<span style="color:#98a3b6">(вкл. уголок ' + U.sgn(crossOnly) + ')</span>' : '') + '</td><td>' + col(pnlWorldRub) + '</td></tr>' +
+          '<tr><td>2. Зарубежная нога ($ → ₽ по ' + fx1 + ' ₽/$)</td><td>' + w0 + ' → ' + w1 + ' $ ' + (crossOnly !== 0 ? '<span style="color:var(--muted)">(вкл. уголок ' + U.sgn(crossOnly) + ')</span>' : '') + '</td><td>' + col(pnlWorldRub) + '</td></tr>' +
           '<tr><td style="color:' + BAD + '"><b>Итого 2 ноги БЕЗ валютного хеджа</b></td><td>спред сжался на +4,00 п., но курс вмешался</td><td><b>' + col(twoLegs) + '</b></td></tr>' +
           '<tr><td style="color:' + SIM + '">3. Валютный фьючерс (номинал ' + w0 + ' $)</td><td>' + fx0 + ' → ' + fx1 + ' ₽/$</td><td>' + col(pnlFxRub) + '</td></tr>' +
           '<tr><td style="color:' + ME + '"><b>Итого честные 3 ноги С валютным хеджем</b></td><td>ровно чистое схождение спреда (+4,00 п.)</td><td><b>' + col(threeLegs) + '</b></td></tr>';
@@ -418,11 +418,11 @@
         const obsSp = dom - ((afterClose ? obsW : trueW) * fx) / 100;
 
         el.querySelector('#svg4').innerHTML = `
-          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:#10151f;border:1px solid #262e3f;border-radius:10px;display:block">
+          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:var(--surface-inset);border:1px solid var(--line);border-radius:10px;display:block">
             <rect x="${xOf(11)}" y="18" width="${closeX - xOf(11)}" height="18" rx="4" fill="#35d07f26" stroke="#35d07f66"/>
             <text x="${xOf(11) + 6}" y="31" fill="#7ee0b5" font-size="11.5">Общее окно всех 3 рынков (11:00–18:30) — честный синхронный срез</text>
             <rect x="${xOf(10)}" y="46" width="${xOf(23.8) - xOf(10)}" height="18" rx="4" fill="#5aa9ff33"/>
-            <text x="${xOf(10) + 6}" y="59" fill="#cdd7e8" font-size="11.5">Внутренняя площадка с вечерней сессией (10:00–23:50)</text>
+            <text x="${xOf(10) + 6}" y="59" fill="var(--text-2)" font-size="11.5">Внутренняя площадка с вечерней сессией (10:00–23:50)</text>
             <rect x="${xOf(11)}" y="72" width="${closeX - xOf(11)}" height="18" rx="4" fill="#f5a65b44"/>
             <text x="${xOf(11) + 6}" y="85" fill="#ffd166" font-size="11.5">Дневной фиксинг внешней площадки (замирает в 18:30)</text>
             <line x1="${newsX}" y1="12" x2="${newsX}" y2="100" stroke="${BAD}" stroke-dasharray="4,3"/>
