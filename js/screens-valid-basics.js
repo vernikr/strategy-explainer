@@ -140,14 +140,14 @@
           <h4>Двумерные карты Sharpe (6 × 6 = 36 настроек): кликните любую клетку!</h4>
           <div class="btns" id="b2" style="margin:0 0 10px"></div>
           <div id="kpi2" style="margin-bottom:10px"></div>
-          <div class="cols" style="gap:12px">
-            <div>
-              <p class="cap" style="margin:0 0 6px"><b>Обучение (IS):</b> ★ — пик IS, ◉ — центр плато</p>
-              <table class="t" id="hmIs" style="text-align:center;font-size:13px"></table>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px">
+            <div style="min-width:0">
+              <p class="cap" style="margin:0 0 6px"><b>Обучение (IS):</b> ★ — пик IS, ◉ — плато</p>
+              <table class="t" id="hmIs" style="width:100%;table-layout:fixed;text-align:center;font-size:12.5px"></table>
             </div>
-            <div>
-              <p class="cap" style="margin:0 0 6px"><b>Проверка вне выборки (OOS):</b> что вышло на новом участке</p>
-              <table class="t" id="hmOos" style="text-align:center;font-size:13px"></table>
+            <div style="min-width:0">
+              <p class="cap" style="margin:0 0 6px"><b>Вне выборки (OOS):</b> новый участок</p>
+              <table class="t" id="hmOos" style="width:100%;table-layout:fixed;text-align:center;font-size:12.5px"></table>
             </div>
           </div>
           <div id="cell2" class="note" style="margin-top:10px"></div>
@@ -169,16 +169,16 @@
 
       let curSurf = null;
       function renderGrid(grid, isLeft) {
-        let html = '<tr><th>N \\ z</th>' + curSurf.zGrid.map((z) => '<th>' + f(z, 2) + '</th>').join('') + '</tr>';
+        let html = '<tr><th style="padding:4px 2px">N\\z</th>' + curSurf.zGrid.map((z) => '<th style="padding:4px 2px">' + f(z, 2) + '</th>').join('') + '</tr>';
         for (let r = 0; r < curSurf.nGrid.length; r++) {
-          html += '<tr><th>' + curSurf.nGrid[r] + '</th>';
+          html += '<tr><th style="padding:4px 2px">' + curSurf.nGrid[r] + '</th>';
           for (let c = 0; c < curSurf.zGrid.length; c++) {
             const val = grid[r][c];
             const isPk = r === curSurf.peak.r && c === curSurf.peak.c;
             const isPl = r === curSurf.plateau.r && c === curSurf.plateau.c;
             const isSel = r === s2.selR && c === s2.selC;
             const mark = isPk && isPl ? '★◉ ' : (isPk ? '★ ' : (isPl ? '◉ ' : ''));
-            html += '<td data-r="' + r + '" data-c="' + c + '" style="cursor:pointer;background:' + bgForSR(val) +
+            html += '<td data-r="' + r + '" data-c="' + c + '" style="padding:5px 2px;cursor:pointer;background:' + bgForSR(val) +
               (isSel ? ';outline:2px solid ' + GOLD + ';font-weight:700' : '') + '">' +
               (isLeft ? mark : '') + f(val, 1) + '</td>';
           }
