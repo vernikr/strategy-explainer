@@ -4646,7 +4646,497 @@
   }
 
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+
+  /* =========================================================================
+   * РАЗДЕЛ 16 (#52): ОСТОРОЖНЫЕ ML-НАДСТРОЙКИ БЕЗ «ЧЁРНОГО ЯЩИКА»
+   * Тройной барьер, meta-labeling, survival P(T ≤ H), конформный интервал и рамки RL
+   * ========================================================================= */
+
+  // Честная разметка сделки методом тройного барьера (triple-barrier, §5.3) без подглядывания за maxKnownIdx
+  function tripleBarrierLabel(spread, entryIdx, dir, opts) {
+    const o = opts || {};
+    const sigma = Math.max(0.15, +o.sigmaBar || 1.0);
+    const ptDist = Math.max(0.2, (+o.ptMult || 1.30) * sigma);
+    const slDist = Math.max(0.2, (+o.slMult || 1.55) * sigma);
+    const maxHold = Math.max(2, Math.round(+o.maxHold || 18));
+    const cost = o.cost !== undefined ? +o.cost : 0.34;
+    const n = spread.length;
+    const maxKnown = o.maxKnownIdx !== undefined ? Math.min(n - 1, o.maxKnownIdx) : (n - 1);
+
+    const entryPrice = spread[entryIdx];
+    const upperPrice = entryPrice + (dir > 0 ? ptDist : slDist);
+    const lowerPrice = entryPrice - (dir > 0 ? slDist : ptDist);
+    const endIdx = Math.min(entryIdx + maxHold, maxKnown);
+
+    let exitIdx = endIdx;
+    let outcome = 'timeout';
+    for (let t = entryIdx + 1; t <= endIdx; t++) {
+      const move = dir * (spread[t] - entryPrice);
+      if (move >= ptDist) {
+        exitIdx = t;
+        outcome = 'take';
+        break;
+      }
+      if (move <= -slDist) {
+        exitIdx = t;
+        outcome = 'stop';
+        break;
+      }
+    }
+
+    const truncatedBySplit = (outcome === 'timeout') && (entryIdx + maxHold > maxKnown);
+    const grossMove = dir * (spread[exitIdx] - entryPrice);
+    const netPnl = grossMove - cost;
+    const label = outcome === 'take' && netPnl > 0 ? 1 : (outcome === 'stop' ? -1 : 0);
+
+    return {
+      entryIdx,
+      exitIdx,
+      holdBars: Math.max(1, exitIdx - entryIdx),
+      dir,
+      entryPrice,
+      exitPrice: spread[exitIdx],
+      ptDist,
+      slDist,
+      upperPrice,
+      lowerPrice,
+      maxHold,
+      outcome: truncatedBySplit ? 'purged_right' : outcome,
+      censored: outcome !== 'take',
+      truncatedBySplit,
+      grossMove,
+      netPnl,
+      label,
+      metaTarget: (outcome === 'take' && netPnl > 0) ? 1 : 0
+    };
+  }
+
+  // Непараметрическая кривая выживаемости Каплана — Мейера и вероятность схождения P(T_conv ≤ H) (§4.8)
+  function kaplanMeierSurvival(episodes, opts) {
+    const o = opts || {};
+    const maxH = Math.max(5, Math.round(+o.maxH || 40));
+    const hazardMult = o.hazardMult !== undefined ? Math.max(0.15, Math.min(3.0, +o.hazardMult)) : 1.0;
+    const daysToExpiry = o.daysToExpiry !== undefined ? Math.max(1, Math.round(+o.daysToExpiry)) : 25;
+    const minProbGate = o.minProbGate !== undefined ? +o.minProbGate : 0.52;
+
+    const horizons = [];
+    const survBase = [];
+    const convProb = [];
+    let s = 1.0;
+
+    for (let h = 1; h <= maxH; h++) {
+      let atRisk = 0, eventsAtH = 0;
+      for (let i = 0; i < episodes.length; i++) {
+        const ep = episodes[i];
+        if (ep.holdBars >= h) atRisk++;
+        if (ep.converged && ep.holdBars === h) eventsAtH++;
+      }
+      if (atRisk > 0 && eventsAtH > 0) {
+        s *= (1 - eventsAtH / atRisk);
+      }
+      const sAdj = Math.pow(Math.max(0, Math.min(1, s)), hazardMult);
+      horizons.push(h);
+      survBase.push(sAdj);
+      convProb.push(1 - sAdj);
+    }
+
+    const probAt = (h) => {
+      if (h <= 0) return 0;
+      const idx = Math.max(0, Math.min(maxH - 1, Math.round(h) - 1));
+      return convProb[idx] || 0;
+    };
+
+    let medianBars = null;
+    for (let i = 0; i < maxH; i++) {
+      if (convProb[i] >= 0.50) { medianBars = horizons[i]; break; }
+    }
+
+    const probBeforeExpiry = probAt(daysToExpiry);
+    return {
+      horizons,
+      survProb: survBase,
+      convProb,
+      p5: probAt(5),
+      p10: probAt(10),
+      p20: probAt(20),
+      p40: probAt(40),
+      medianBars,
+      daysToExpiry,
+      probBeforeExpiry,
+      passesExpiryGate: probBeforeExpiry >= minProbGate
+    };
+  }
+
+  // Двуслойная мета-маркировка (§4.8): L2-регуляризованный логистический фильтр поверх сигнала базовой модели
+  function fitMetaLabeler(samples) {
+    if (!samples || samples.length < 5) {
+      return { bias: 0.75, weights: [-1.10, -1.15, -1.25, -1.10], trainedOn: samples ? samples.length : 0 };
+    }
+    let bias = 0.25;
+    const w = [-0.8, -0.8, -0.9, -0.8];
+    const lr = 0.22, l2 = 0.04;
+    for (let ep = 0; ep < 180; ep++) {
+      let gb = 0;
+      const gw = [0, 0, 0, 0];
+      for (let i = 0; i < samples.length; i++) {
+        const x = samples[i].x, y = samples[i].y;
+        const z = bias + w[0] * x[0] + w[1] * x[1] + w[2] * x[2] + w[3] * x[3];
+        const p = 1 / (1 + Math.exp(-Math.max(-12, Math.min(12, z))));
+        const err = p - y;
+        gb += err;
+        for (let k = 0; k < 4; k++) gw[k] += err * x[k];
+      }
+      const invN = 1 / samples.length;
+      bias -= lr * (gb * invN);
+      for (let k = 0; k < 4; k++) {
+        w[k] -= lr * (gw[k] * invN + l2 * w[k]);
+        if (w[k] > -0.15) w[k] = -0.15;
+      }
+    }
+    return { bias, weights: w, trainedOn: samples.length };
+  }
+
+  function predictMetaProb(model, featArray) {
+    const m = model || { bias: 0.75, weights: [-1.10, -1.15, -1.25, -1.10] };
+    const x = featArray || [0, 0, 0, 0];
+    let z = m.bias;
+    const contrib = [];
+    for (let k = 0; k < 4; k++) {
+      const c = m.weights[k] * x[k];
+      contrib.push(c);
+      z += c;
+    }
+    const prob = 1 / (1 + Math.exp(-Math.max(-12, Math.min(12, z))));
+    let action = 'skip', sizeMult = 0;
+    if (prob >= 0.62) { action = 'full'; sizeMult = 1.0; }
+    else if (prob >= 0.47) { action = 'half'; sizeMult = 0.5; }
+    return { prob, logit: z, contrib, action, sizeMult };
+  }
+
+  // Split-конформный доверительный интервал с гарантией покрытия и downweighting скора (§7.6)
+  function conformalInterval(calibTruth, calibPred, pointPred, opts) {
+    const o = opts || {};
+    const alpha = o.alpha !== undefined ? Math.max(0.01, Math.min(0.40, +o.alpha)) : 0.10;
+    const penaltyGamma = o.penaltyGamma !== undefined ? +o.penaltyGamma : 0.65;
+    const n = Math.min(calibTruth.length, calibPred.length);
+    if (n === 0) {
+      return { point: pointPred, lo: Math.max(0, pointPred - 0.15), hi: Math.min(1, pointPred + 0.15), halfWidth: 0.15, width: 0.30, coverageTarget: 1 - alpha, downweightFactor: 0.8, effectiveScore: pointPred * 0.8 };
+    }
+    const residuals = [];
+    for (let i = 0; i < n; i++) residuals.push(Math.abs(calibTruth[i] - calibPred[i]));
+    residuals.sort((a, b) => a - b);
+    const kIdx = Math.min(n - 1, Math.max(0, Math.ceil((n + 1) * (1 - alpha)) - 1));
+    const qHat = residuals[kIdx];
+    const lo = Math.max(0, pointPred - qHat);
+    const hi = Math.min(1, pointPred + qHat);
+    const width = hi - lo;
+    const downweightFactor = Math.max(0.25, 1 - penaltyGamma * width);
+    return {
+      point: pointPred,
+      qHat,
+      lo,
+      hi,
+      halfWidth: qHat,
+      width,
+      coverageTarget: 1 - alpha,
+      downweightFactor,
+      effectiveScore: pointPred * downweightFactor
+    };
+  }
+
+  // Пять жёстких предохранителей для research-only RL (§4.9)
+  function evalRlSafeguards(cfg) {
+    const c = cfg || {};
+    const checks = [
+      { id: 'benchmark', label: 'Превосходит базовую стратегию A–G вне выборки', ok: !!c.beatsBenchmark, why: 'RL не имеет права просто «быть в плюсе» — он обязан обыграть прозрачный Z-score/OU.' },
+      { id: 'wfo', label: 'Прошёл чистый Walk-Forward с purging/embargo', ok: !!c.walkForwardClean, why: 'Без неперекрытых окон агент заучивает траекторию исторических цен наизусть.' },
+      { id: 'costs', label: 'Обучен со всеми 4 слоями реальных издержек', ok: !!c.realisticCosts, why: 'В мире нулевых комиссий RL совершает сотни микросделок в день и сгорает в стакане.' },
+      { id: 'limits', label: 'Внешние жёсткие лимиты позиции и плеча', ok: !!c.leverageCapped, why: 'Потолок риска обязан стоять снаружи нейросети, чтобы агент не удвоил убыток мартингейлом.' },
+      { id: 'killswitch', label: 'Взведён автоматический аварийный Kill-Switch', ok: !!c.killSwitchArmed, why: 'При аномальной просадке или скачке оборота рубильник мгновенно переводит агента в кэш.' }
+    ];
+    const passedCount = checks.filter((x) => x.ok).length;
+    const allowedInSandbox = passedCount === 5;
+    return {
+      allowedInSandbox,
+      neverProdEngine: true,
+      passedCount,
+      checks,
+      badge: 'ЭКСПЕРИМЕНТАЛЬНАЯ МОДЕЛЬ (RESEARCH-ONLY) — НЕ ДЛЯ ПРОДА',
+      verdict: allowedInSandbox ? 'SANDBOX_OK' : 'BLOCKED'
+    };
+  }
+
+  const ML_SCENARIOS = [
+    {
+      id: 'noisy_traps',
+      name: 'Ложные выносы в бурю и всплески издержек',
+      note: 'В спокойные недели спред исправно возвращается к среднему, но периодически приходят бурные сносы с дорогим стаканом: базовый Z-score ловит стопы, «чёрный ящик» путается в лагах, а Meta-labeling аккуратно пропускает токсичные входы.'
+    },
+    {
+      id: 'expiry_crunch',
+      name: 'Ловушка экспирации: нехватка горизонта до истечения',
+      note: 'Контракт истекает каждые 30 сессий с предэкспирационным размыванием базиса: базовый Z-score открывает сделки даже за 4–8 дней до истечения и закрывает их с убытком ролла, а кривая выживаемости P(T_conv ≤ H) отсекает входы без запаса времени.'
+    },
+    {
+      id: 'pure_noise_overfit',
+      name: 'Чистый рыночный шум без возврата (тест на самообман ИИ)',
+      note: 'Случайное блуждание без коинтеграции: прямой «чёрный ящик» на 16 лагах и бесконтрольный RL находят призрачные узоры на обучении и теряют капитал вне выборки, а двуслойный оверлей гасит торговлю почти в ноль.'
+    },
+    {
+      id: 'clean_reversion',
+      name: 'Здоровая возвратная пара (контрольный эталон)',
+      note: 'Устойчивый среднесрочный возврат без структурных бурь: осторожная надстройка Meta + Survival сохраняет доходность базового Z-score при меньшей просадке, тогда как гиперактивный RL растрачивает край на комиссии.'
+    }
+  ];
+
+  function genMlScenario(seed, scenario) {
+    const sc = scenario || ML_SCENARIOS[0];
+    const rand = mulberry32((seed * 262147 + sc.id.length * 12289) >>> 0);
+    const nNorm = () => {
+      const u1 = Math.max(1e-9, rand()), u2 = rand();
+      return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    };
+    const T = 360, splitIdx = 180;
+    const spread = new Array(T).fill(0);
+    const stormFlag = new Array(T).fill(0);
+    const costSeries = new Array(T).fill(0.30);
+    const daysToExp = new Array(T).fill(30);
+    const cycleLen = sc.id === 'expiry_crunch' ? 36 : 60;
+
+    let x = 0;
+    for (let t = 0; t < T; t++) {
+      const rem = cycleLen - (t % cycleLen);
+      daysToExp[t] = rem;
+
+      const isStorm = sc.id === 'noisy_traps' && ((t >= 40 && t <= 62) || (t >= 114 && t <= 136) || (t >= 208 && t <= 230) || (t >= 290 && t <= 312));
+      stormFlag[t] = isStorm ? 1 : 0;
+      costSeries[t] = isStorm ? 1.15 : (sc.id === 'expiry_crunch' && rem <= 9 ? 0.72 : (sc.id === 'clean_reversion' ? 0.26 : 0.30));
+
+      if (sc.id === 'pure_noise_overfit') {
+        x += 0.95 * nNorm();
+      } else if (sc.id === 'expiry_crunch') {
+        // Среднесрочный полураспад ~7–9 баров в начале цикла, но за ≤ 9 дней до экспирации возврат глохнет и базис уплывает!
+        if (rem === cycleLen && t > 0) {
+          x = 0.25 * nNorm();
+        } else if (rem <= 8) {
+          const away = x >= 0 ? 0.34 : -0.34;
+          x = 0.99 * x + away + 1.05 * nNorm();
+        } else {
+          x = 0.82 * x + 0.92 * nNorm();
+        }
+      } else {
+        const kappa = isStorm ? 0.02 : 0.20;
+        const drift = isStorm ? ((t < 180 ? (t < 90 ? 0.55 : -0.55) : (t < 265 ? 0.58 : -0.58))) : 0;
+        const sigma = isStorm ? 2.25 : 0.90;
+        x = (1 - kappa) * x + drift + sigma * nNorm();
+      }
+      spread[t] = x;
+    }
+
+    return { scenario: sc, seed, T, splitIdx, spread, stormFlag, costSeries, daysToExp, cycleLen };
+  }
+
+  function mlBarFeatures(md, t, zVal) {
+    const sp = md.spread;
+    let sShort = 0, sLong = 0;
+    for (let k = Math.max(1, t - 5); k <= t; k++) { const d = sp[k] - sp[k - 1]; sShort += d * d; }
+    for (let k = Math.max(1, t - 35); k <= t; k++) { const d = sp[k] - sp[k - 1]; sLong += d * d; }
+    const sig5 = Math.sqrt(sShort / Math.max(1, Math.min(5, t)));
+    const sig35 = Math.max(0.35, Math.sqrt(sLong / Math.max(1, Math.min(35, t))));
+    const volExcess = Math.max(0, sig5 / sig35 - 1.0);
+    const driftSlope = t >= 8 ? Math.abs(sp[t] - sp[t - 8]) / (sig35 * Math.sqrt(8)) : 0;
+    const driftExcess = Math.max(0, driftSlope - 0.80);
+    const costRatio = Math.max(0, (md.costSeries[t] - 0.28) / 0.55);
+    const expTight = Math.max(0, (12 - md.daysToExp[t]) / 9);
+    return {
+      x: [volExcess, driftExcess, costRatio, expTight],
+      sig35,
+      zAbs: Math.abs(zVal),
+      daysToExp: md.daysToExp[t],
+      cost: md.costSeries[t]
+    };
+  }
+
+  function backtestMlApproaches(md) {
+    const { spread, splitIdx, T, daysToExp, costSeries } = md;
+    const winN = 26, entryZ = 1.40, exitZ = 0.25, maxHold = 16;
+
+    const zArr = new Array(T).fill(0);
+    const sdArr = new Array(T).fill(1);
+    for (let t = winN; t < T; t++) {
+      let s = 0;
+      for (let k = t - winN; k < t; k++) s += spread[k];
+      const m = s / winN;
+      let v = 0;
+      for (let k = t - winN; k < t; k++) { const d = spread[k] - m; v += d * d; }
+      const sd = Math.max(0.25, Math.sqrt(v / (winN - 1)));
+      sdArr[t] = sd;
+      zArr[t] = (spread[t] - m) / sd;
+    }
+
+    // Сбор обучающих меток тройного барьера строго в [winN .. splitIdx - 1] с правосторонним пурджингом (maxKnownIdx = splitIdx - 1)!
+    const trainSamples = [];
+    const trainEpisodes = [];
+    let lastSignalBar = -99;
+    for (let t = winN; t < splitIdx - 4; t++) {
+      if (t - lastSignalBar < 3) continue;
+      if (Math.abs(zArr[t]) >= entryZ) {
+        const dir = zArr[t] > 0 ? -1 : 1;
+        // Горизонт сделке обрезается и экспирацией, и границей обучения splitIdx - 1!
+        const effHold = Math.min(maxHold, Math.max(2, daysToExp[t] - 1));
+        const tb = tripleBarrierLabel(spread, t, dir, {
+          sigmaBar: sdArr[t], ptMult: 1.15, slMult: 1.50, maxHold: effHold, cost: costSeries[t], maxKnownIdx: splitIdx - 1
+        });
+        const ft = mlBarFeatures(md, t, zArr[t]);
+        if (!tb.truncatedBySplit) {
+          trainSamples.push({ x: ft.x, y: tb.metaTarget });
+          // Для кривой времени схождения берём чистые циклы с достаточным окном, чтобы измерить естественную скорость схождения
+          if (daysToExp[t] >= 12) {
+            trainEpisodes.push({ holdBars: tb.holdBars, converged: tb.outcome === 'take' });
+          }
+        }
+        lastSignalBar = t;
+      }
+    }
+
+    const metaModel = fitMetaLabeler(trainSamples);
+    const kmBase = kaplanMeierSurvival(trainEpisodes, { maxH: 30 });
+
+    const LAGS = 16;
+    const bbWeights = new Array(LAGS).fill(0);
+    for (let k = 0; k < LAGS; k++) {
+      let cov = 0;
+      for (let t = LAGS + 2; t < splitIdx - 1; t++) {
+        cov += (spread[t - k] - spread[t - k - 1]) * (spread[t + 1] - spread[t]);
+      }
+      bbWeights[k] = cov / Math.max(1, splitIdx - LAGS - 3);
+    }
+
+    let rlW1 = 0, rlW2 = 0;
+    for (let t = 5; t < splitIdx - 1; t++) {
+      rlW1 += (spread[t] - spread[t - 1]) * (spread[t + 1] - spread[t]);
+      rlW2 += (spread[t] - spread[t - 3]) * (spread[t + 1] - spread[t]);
+    }
+
+    const oosLen = T - splitIdx;
+    function simBaseOrOverlay(useOverlay) {
+      const diffs = new Array(oosLen).fill(0);
+      const eq = new Array(oosLen).fill(0);
+      let pos = 0, size = 0, hold = 0, trades = 0, skipped = 0, acc = 0;
+      const log = [];
+
+      for (let idx = 0; idx < oosLen; idx++) {
+        const t = splitIdx + idx;
+        let dayPnl = 0;
+        if (pos !== 0) {
+          // Если произошла перекладка на новый контракт — позиция была принудительно закрыта в конце прошлого контракта с издержкой ролла!
+          if (daysToExp[t] > daysToExp[t - 1]) {
+            pos = 0; size = 0; hold = 0;
+          } else {
+            dayPnl += pos * size * (spread[t] - spread[t - 1]);
+            hold++;
+            const hitExit = (pos > 0 && zArr[t] >= -exitZ) || (pos < 0 && zArr[t] <= exitZ);
+            const hitStop = Math.abs(zArr[t]) >= 3.35 || hold >= maxHold || daysToExp[t] <= 1;
+            if (hitExit || hitStop) {
+              const expPen = (daysToExp[t] <= 1 && !hitExit) ? 0.65 : 0;
+              dayPnl -= size * (costSeries[t] * 0.5 + expPen);
+              pos = 0; size = 0; hold = 0;
+            }
+          }
+        }
+        if (pos === 0 && Math.abs(zArr[t]) >= entryZ && daysToExp[t] >= 3) {
+          const dir = zArr[t] > 0 ? -1 : 1;
+          if (!useOverlay) {
+            pos = dir; size = 1.0; hold = 0; trades++;
+            dayPnl -= size * costSeries[t] * 0.5;
+          } else {
+            const ft = mlBarFeatures(md, t, zArr[t]);
+            const mp = predictMetaProb(metaModel, ft.x);
+            const haz = Math.max(0.20, 1.10 - 0.35 * ft.x[0] - 0.35 * ft.x[1]);
+            const surv = kaplanMeierSurvival(trainEpisodes, { maxH: 30, hazardMult: haz, daysToExpiry: daysToExp[t] - 1, minProbGate: 0.52 });
+            if (mp.sizeMult > 0 && surv.passesExpiryGate) {
+              pos = dir; size = mp.sizeMult; hold = 0; trades++;
+              dayPnl -= size * costSeries[t] * 0.5;
+              log.push({ t, z: zArr[t], prob: mp.prob, pExp: surv.probBeforeExpiry, action: mp.action, daysToExp: daysToExp[t] });
+            } else {
+              skipped++;
+              log.push({ t, z: zArr[t], prob: mp.prob, pExp: surv.probBeforeExpiry, action: 'skip', daysToExp: daysToExp[t] });
+            }
+          }
+        }
+        diffs[idx] = dayPnl;
+        acc += dayPnl;
+        eq[idx] = acc;
+      }
+      const st = returnStats(diffs);
+      return { equity: eq, diffs, total: st.total, srAnn: st.srAnn, maxDD: st.maxDD, trades, skipped, log };
+    }
+
+    function simBlackbox() {
+      const diffs = new Array(oosLen).fill(0);
+      const eq = new Array(oosLen).fill(0);
+      let pos = 0, trades = 0, acc = 0;
+      for (let idx = 0; idx < oosLen; idx++) {
+        const t = splitIdx + idx;
+        let dayPnl = (daysToExp[t] > daysToExp[t - 1]) ? 0 : pos * (spread[t] - spread[t - 1]);
+        let score = 0;
+        for (let k = 0; k < LAGS; k++) score += bbWeights[k] * (spread[t - k] - spread[t - k - 1]);
+        const want = score > 0.04 ? 1 : (score < -0.04 ? -1 : 0);
+        if (want !== pos) {
+          if (want !== 0) trades++;
+          dayPnl -= Math.abs(want - pos) * costSeries[t] * 0.5;
+          pos = want;
+        }
+        diffs[idx] = dayPnl;
+        acc += dayPnl;
+        eq[idx] = acc;
+      }
+      const st = returnStats(diffs);
+      return { equity: eq, diffs, total: st.total, srAnn: st.srAnn, maxDD: st.maxDD, trades };
+    }
+
+    function simNaiveRl() {
+      const diffs = new Array(oosLen).fill(0);
+      const eq = new Array(oosLen).fill(0);
+      let pos = 0, trades = 0, acc = 0, lossStreak = 0;
+      for (let idx = 0; idx < oosLen; idx++) {
+        const t = splitIdx + idx;
+        const prevMove = (daysToExp[t] > daysToExp[t - 1]) ? 0 : (spread[t] - spread[t - 1]);
+        let dayPnl = pos * prevMove;
+        if (dayPnl < -0.2) lossStreak++; else if (dayPnl > 0.2) lossStreak = 0;
+        const sig = rlW1 * (spread[t] - spread[t - 1]) + rlW2 * (spread[t] - spread[t - 3]) - 0.18 * zArr[t];
+        const lev = Math.min(2.4, 1.0 + 0.35 * lossStreak);
+        const want = sig >= 0 ? lev : -lev;
+        if (Math.abs(want - pos) > 0.25) {
+          trades++;
+          dayPnl -= Math.abs(want - pos) * costSeries[t] * 0.55;
+          pos = want;
+        }
+        diffs[idx] = dayPnl;
+        acc += dayPnl;
+        eq[idx] = acc;
+      }
+      const st = returnStats(diffs);
+      return { equity: eq, diffs, total: st.total, srAnn: st.srAnn, maxDD: st.maxDD, trades };
+    }
+
+    return {
+      metaModel,
+      kmBase,
+      zArr,
+      sdArr,
+      trainCount: trainSamples.length,
+      approaches: {
+        base_z: simBaseOrOverlay(false),
+        blackbox_ml: simBlackbox(),
+        naive_rl: simNaiveRl(),
+        meta_survival: simBaseOrOverlay(true)
+      }
+    };
+  }
+
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, tripleBarrierLabel, kaplanMeierSurvival, fitMetaLabeler, predictMetaProb, conformalInterval, evalRlSafeguards, ML_SCENARIOS, genMlScenario, mlBarFeatures, backtestMlApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

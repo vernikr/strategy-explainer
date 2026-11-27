@@ -953,4 +953,62 @@ for (const sc of E.MOEX_SCENARIOS) {
   assert(agg.balanced_year.srSb > agg.balanced_year.srNv + 1.2 && agg.balanced_year.ddSb < agg.balanced_year.ddNv * 0.65);
 }
 
+// 48. Осторожные ML-надстройки: тройной барьер, выживаемость P(T ≤ H), конформный интервал и предохранители RL (#52)
+{
+  const sp = [0, -2.0, -1.5, -0.8, 0.1, 0.5];
+  const tbTake = E.tripleBarrierLabel(sp, 1, 1, { sigmaBar: 1.0, ptMult: 1.4, slMult: 1.5, maxHold: 4, cost: 0.2 });
+  assert.strictEqual(tbTake.outcome, 'take');
+  assert.strictEqual(tbTake.metaTarget, 1);
+
+  // Правостороннее цензурирование на границе обучения maxKnownIdx (никакого подглядывания в тест!)
+  const spSplit = [0, -2.2, -2.1, -2.0, 0.5, 0.8];
+  const tbPurged = E.tripleBarrierLabel(spSplit, 1, 1, { sigmaBar: 1.0, ptMult: 1.4, slMult: 1.5, maxHold: 4, maxKnownIdx: 3 });
+  assert.strictEqual(tbPurged.truncatedBySplit, true);
+  assert.strictEqual(tbPurged.outcome, 'purged_right');
+
+  // Кривая Каплана — Мейера P(T_conv ≤ H) монотонно не убывает по H
+  const eps = [
+    { holdBars: 4, converged: true }, { holdBars: 6, converged: true }, { holdBars: 9, converged: true },
+    { holdBars: 14, converged: true }, { holdBars: 18, converged: false }, { holdBars: 12, converged: true }
+  ];
+  const km = E.kaplanMeierSurvival(eps, { maxH: 30, daysToExpiry: 5, minProbGate: 0.50 });
+  assert(km.p5 <= km.p10 && km.p10 <= km.p20 && km.p20 <= km.p40);
+  assert(!km.passesExpiryGate);
+
+  // Конформное предсказание и downweighting за широкую неопределённость (§7.6)
+  const cTight = E.conformalInterval([0.81, 0.84, 0.82, 0.85, 0.80, 0.83, 0.84, 0.82, 0.81], [0.82, 0.83, 0.81, 0.84, 0.82, 0.82, 0.83, 0.83, 0.82], 0.83, { alpha: 0.10 });
+  const cWide  = E.conformalInterval([0.60, 0.96, 0.55, 0.92, 0.58, 0.95, 0.61, 0.94, 0.57], [0.85, 0.82, 0.84, 0.80, 0.85, 0.81, 0.84, 0.82, 0.83], 0.85, { alpha: 0.10 });
+  assert(cTight.width < cWide.width && cTight.effectiveScore > cWide.effectiveScore);
+
+  // 5 предохранителей research-only RL (§4.9)
+  const rlBlocked = E.evalRlSafeguards({ beatsBenchmark: true, walkForwardClean: true, realisticCosts: false, leverageCapped: true, killSwitchArmed: true });
+  const rlSandbox = E.evalRlSafeguards({ beatsBenchmark: true, walkForwardClean: true, realisticCosts: true, leverageCapped: true, killSwitchArmed: true });
+  assert(!rlBlocked.allowedInSandbox && rlSandbox.allowedInSandbox && rlSandbox.neverProdEngine);
+}
+
+// 49. Сравнение 4 подходов (базовый Z, чёрный ящик, бесконтрольный RL, Meta+Survival) на 4 сценариях × 11 историях
+{
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 11, 13, 21, 42];
+  const agg = {};
+  E.ML_SCENARIOS.forEach((sc) => {
+    let tBz = 0, tBb = 0, tRl = 0, tMs = 0, ddBz = 0, ddMs = 0;
+    seeds.forEach((sd) => {
+      const md = E.genMlScenario(sd, sc);
+      const r = E.backtestMlApproaches(md);
+      tBz += r.approaches.base_z.total;
+      tBb += r.approaches.blackbox_ml.total;
+      tRl += r.approaches.naive_rl.total;
+      tMs += r.approaches.meta_survival.total;
+      ddBz += r.approaches.base_z.maxDD / seeds.length;
+      ddMs += r.approaches.meta_survival.maxDD / seeds.length;
+    });
+    agg[sc.id] = { tBz, tBb, tRl, tMs, ddBz, ddMs };
+    console.log('ML-оверлеи, «' + sc.name + '»: база Z ' + tBz.toFixed(0) + ', чёрный ящик ' + tBb.toFixed(0) + ', наивный RL ' + tRl.toFixed(0) + ', Meta+Survival ' + tMs.toFixed(0));
+  });
+  assert(agg.noisy_traps.tMs > agg.noisy_traps.tBz + 40 && agg.noisy_traps.ddMs < agg.noisy_traps.ddBz * 0.65 && agg.noisy_traps.tBb < -200);
+  assert(agg.expiry_crunch.tMs > 40 && agg.expiry_crunch.tBz < 0 && agg.expiry_crunch.tRl < -150);
+  assert(agg.pure_noise_overfit.tMs > agg.pure_noise_overfit.tBb + 150 && agg.pure_noise_overfit.tMs > agg.pure_noise_overfit.tRl + 150);
+  assert(agg.clean_reversion.tMs > 150 && agg.clean_reversion.tBb < 0);
+}
+
 console.log('OK: все проверки пройдены');
