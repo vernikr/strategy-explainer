@@ -10,19 +10,21 @@
   const pct = (v, d) => U.fmt(v * 100, d === undefined ? 0 : d) + '%';
   const col = (x, d) => '<span class="' + (x >= 0 ? 'pos' : 'neg') + '">' + U.sgn(x, d === undefined ? 0 : d) + '</span>';
 
-  /* ---------- 5. Живой пульт Book: what-if тоглы и паритет риска ---------- */
-  const s5 = { active: [0, 4, 6, 7], riskParity: true };
+  /* ---------- 5. Живой пульт Book: what-if тоглы, паритет риска и Skeptical Mode ---------- */
+  const s5 = { active: [0, 4, 6, 7], riskParity: true, skeptical: false };
+  const WORST_2022_SR = [-1.35, -1.28, -1.10, -1.18, 0.68, 0.54, 1.05, 0.89];
 
   Z.push({
     id: 'book-whatif',
-    title: 'Живой пульт книги (Book): what-if переключатели и паритет риска',
-    lead: 'Настоящий портфельный экран показывает не сольные медали пар, а то, как меняется вся книга при включении или отключении каждой позиции — и тут же сигналит о дублях.',
+    title: 'Живой пульт книги (Book): what-if переключатели, паритет риска и Skeptical Mode',
+    lead: 'Настоящий портфельный экран показывает не сольные медали пар, а то, как меняется вся книга при включении или отключении каждой позиции — и позволяет одним нажатием проверить витрину «глазами параноика».',
     text: () => `
-      <h3>Четыре опоры рабочего экрана Book (§8.4)</h3>
+      <h3>Четыре опоры рабочего экрана Book (§8.4 и §8.7)</h3>
       <ul>
         <li><b>What-if переключатели:</b> кликните любую пару, чтобы включить или выключить её из корзины и мгновенно увидеть, вырос ли общий Sharpe книги или просто раздулся хвостовой риск ${T('cvar_metric', 'CVaR 95%')}.</li>
         <li><b>${T('risk_parity_book', 'Паритет риска (risk parity)')}:</b> равное число контрактов обманчиво — бурная пара съест 70% риска всей книги. Веса обратно пропорционально волатильности <code>1/σ</code> выравнивают риск-вклад слотов.</li>
         <li><b>Алерты на избыточность:</b> попробуйте включить рядом <code>SBER/VTBR</code> и <code>SR/VB</code> — пульт мгновенно подсветит дублирующую сцепку <code>ρ ≥ 0,60</code>.</li>
+        <li><b>${T('skeptical_mode', 'Скептический режим (Skeptical Mode)')}:</b> глобальный фильтр параноика (§8.7) пересортировывает витрину по <i>худшему историческому режиму</i> (включая шок 2022 года) и оставляет только выжившие связки!</li>
       </ul>`,
     mount(el) {
       const univ = E.genBookUniverse(7, E.BOOK_SCENARIOS[0]);
@@ -35,6 +37,7 @@
             <button class="b" data-p="sub">Субмодулярный набор (без дублей)</button>
             <button class="b" data-p="top">Топ-4 по сольному скору (клоны)</button>
             <button class="b" data-p="rp"></button>
+            <button class="b" data-p="sk"></button>
           </div>
           <div id="toggles5" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px;margin-bottom:10px"></div>
           <div id="kpi5" style="margin-bottom:10px"></div>
@@ -45,9 +48,13 @@
       el.querySelector('#pre5').addEventListener('click', (ev) => {
         const b = ev.target.closest('button');
         if (!b) return;
-        if (b.dataset.p === 'sub') s5.active = sub.selectedIds.slice();
-        else if (b.dataset.p === 'top') s5.active = sub.soloTopIds.slice();
+        if (b.dataset.p === 'sub') { s5.skeptical = false; s5.active = sub.selectedIds.slice(); }
+        else if (b.dataset.p === 'top') { s5.skeptical = false; s5.active = sub.soloTopIds.slice(); }
         else if (b.dataset.p === 'rp') s5.riskParity = !s5.riskParity;
+        else if (b.dataset.p === 'sk') {
+          s5.skeptical = !s5.skeptical;
+          if (s5.skeptical) s5.active = [4, 5, 6, 7]; // выжившие в стресс-режиме 2022
+        }
         draw5();
       });
 
@@ -75,10 +82,19 @@
         rpBtn.textContent = s5.riskParity ? 'Веса: Risk Parity (1/σ) ✓' : 'Веса: равные лоты (1 : 1)';
         rpBtn.classList.toggle('on', s5.riskParity);
 
-        el.querySelector('#toggles5').innerHTML = univ.pairs.map((p) => {
+        const skBtn = el.querySelector('[data-p="sk"]');
+        skBtn.textContent = s5.skeptical ? '🛡 Skeptical Mode (стресс 2022+) ВКЛ' : '🛡 Skeptical Mode (стресс 2022+)';
+        skBtn.classList.toggle('on', s5.skeptical);
+
+        const ordered = univ.pairs.slice().sort((a, b) => s5.skeptical ? (WORST_2022_SR[b.id] - WORST_2022_SR[a.id]) : (b.soloScore - a.soloScore));
+        el.querySelector('#toggles5').innerHTML = ordered.map((p) => {
           const on = s5.active.indexOf(p.id) !== -1;
+          const wSr = WORST_2022_SR[p.id];
+          const metricTag = s5.skeptical
+            ? '<span style="color:' + (wSr > 0 ? ME : BAD) + '">2022 SR ' + U.sgn(wSr, 2) + '</span>'
+            : '<span>скор ' + f(p.soloScore) + '</span>';
           return '<div data-id="' + p.id + '" style="cursor:pointer;padding:6px 8px;border-radius:8px;border:1px solid ' + (on ? ME : '#283142') + ';background:' + (on ? 'rgba(126,224,181,0.12)' : '#121823') + ';font-size:12.5px">' +
-            '<div style="display:flex;justify-content:space-between"><b>' + (on ? '☑ ' : '☐ ') + p.code + '</b><span>скор ' + f(p.soloScore) + '</span></div>' +
+            '<div style="display:flex;justify-content:space-between"><b>' + (on ? '☑ ' : '☐ ') + p.code + '</b>' + metricTag + '</div>' +
             '<div style="color:#8b96ab;font-size:11.5px">' + p.cluster + ' · ГО ' + p.margin + ' тыс.</div>' +
           '</div>';
         }).join('');
@@ -208,23 +224,22 @@
     }
   });
 
-  /* ---------- 7. Один день книги под лупой: воронка размера и полуавтоматический тикет ---------- */
-  const s7 = { day: 162, slotIdx: 0 };
+  /* ---------- 7. Один день книги под лупой: воронка размера, Monitor (TTL + чек-лист) и тикет ---------- */
+  const s7 = { day: 162, slotIdx: 0, sigAge: 15, slipRatio: 1.05 };
 
   Z.push({
     id: 'book-day-audit',
-    title: 'Один день под лупой: четыре ограничителя размера и готовый тикет',
-    lead: 'Разберём внутри конкретного дня, как из четырёх независимых предохранителей рождается итоговое целое число контрактов и предзаполненный тикет для человека.',
+    title: 'Один день под лупой: размер, живой Monitor (TTL, чек-лист) и тикет',
+    lead: 'Проследим путь сигнала от расчёта объёма до экрана Monitor (§8.5): почему у каждого сигнала есть срок годности TTL, какие 6 проверок проходят перед сделкой и зачем сверять бэктест с живым проскальзыванием.',
     text: () => `
-      <h3>Происхождение каждого лота и принцип «готовит машина — жмёт человек» (§4.10, §6.6)</h3>
-      <p>У рабочего числа контрактов не должно быть «магии» — на каждом баре система проверяет четыре потолка подряд и берёт <b>самый строгий из четырёх</b>:</p>
-      <ol>
-        <li><b>Vol-targeting:</b> дневной рублёвый бюджет слота делим на каузальное 20-дневное СКО спреда.</li>
-        <li><b>0,35× Kelly с поправкой на соседей:</b> учитывает среднюю корреляцию P&L с остальными позициями книги.</li>
-        <li><b>Лимит гарантийного обеспечения (ГО):</b> не более выделенной доли счёта на одну связку.</li>
-        <li><b>Безопасная вместимость стакана (capacity):</b> не более половины видимой глубины лучших цен.</li>
-      </ol>
-      <p>После округления вниз до целых связок система формирует <b>полуавтоматический тикет (semi-automatic execution)</b>: все поля предзаполнены под QUIK / Transaq / API брокера, но кнопка отправки всегда остаётся за человеком.</p>`,
+      <h3>Четыре ограничителя объёма и живой шлюз ${T('signal_ttl', 'Monitor (TTL и чек-лист)')} (§4.10, §6.6, §8.5)</h3>
+      <p>На каждом баре система берёт <b>наименьший из четырёх потолков</b> размера: (1) <b>Vol-targeting</b>, (2) <b>0,35× Kelly с поправкой на соседей</b>, (3) <b>лимит ГО</b> и (4) <b>capacity стакана</b>.</p>
+      <p>Но даже готовый размер не превращается в заявку вслепую — в контуре <b>Monitor</b> сигнал проходит строгий предторговый контроль:</p>
+      <ul>
+        <li><b>Срок годности сигнала (TTL):</b> никаких «вечных рекомендаций»! Если сигнал пролежал дольше <code>TTL = 45 мин</code>, догонять уехавший стакан запрещено.</li>
+        <li><b>6 пунктов Pre-trade checklist:</b> актуальность TTL, синхронная глубина обеих ног, край &gt; издержек, отсутствие флага разрыва, запас ГО/capacity и безопасная основная сессия вдали от клиринга.</li>
+        <li><b>Сверка Backtest vs Live:</b> если фактическое проскальзывание вживую начинает систематически превышать модельное более чем на <code>35%</code>, подача новых тикетов ставится на паузу до ревизии издержек!</li>
+      </ul>`,
     mount(el) {
       const univ = E.genBookUniverse(7, E.BOOK_SCENARIOS[1]); // vol_storm_kelly — есть и штиль, и шторм!
       const sub = E.greedySubmodularSelect(univ.pairs, { t0: 0, t1: univ.splitIdx, maxK: 4 });
@@ -232,10 +247,13 @@
 
       el.innerHTML = `
         <div class="viz">
-          <h4>Паспорт расчёта позиции и предзаполненный тикет дня</h4>
+          <h4>Паспорт расчёта позиции, предторговый чек-лист Monitor и тикет</h4>
           <div id="sl7"></div>
+          <div id="sl7ttl"></div>
+          <div id="sl7dr"></div>
           <div class="btns" id="b7" style="margin:8px 0"></div>
           <div id="funnel7" style="margin-bottom:10px"></div>
+          <div id="chk7" style="margin-bottom:10px"></div>
           <div id="ticket7" class="note"></div>
         </div>`;
 
@@ -243,6 +261,16 @@
         label: 'Торговый день истории (125–144 штиль, 145–198 волатильностный шторм!)', min: 125, max: 215, step: 1, value: s7.day,
         fmt: (v) => 'День #' + v + (v >= 145 && v <= 198 ? ' (ШТОРМ 3,4×!)' : ' (спокойный рынок)'),
         onInput: (v) => { s7.day = v; draw7(); }
+      });
+      HV.slider(el.querySelector('#sl7ttl'), {
+        label: 'Возраст сигнала в очереди Monitor (при сроке годности TTL = 45 мин)', min: 5, max: 90, step: 5, value: s7.sigAge,
+        fmt: (v) => v + ' мин ' + (v <= 45 ? '(свежий сигнал ✓)' : '(TTL ИСТЁК — просрочен!)'),
+        onInput: (v) => { s7.sigAge = v; draw7(); }
+      });
+      HV.slider(el.querySelector('#sl7dr'), {
+        label: 'Сверка Backtest vs Live: отношение живого проскальзывания к расчётному', min: 0.85, max: 1.85, step: 0.05, value: s7.slipRatio,
+        fmt: (v) => f(v, 2) + '× ' + (v <= 1.35 ? '(в норме модели ✓)' : '(расхождение Backtest/Live!)'),
+        onInput: (v) => { s7.slipRatio = v; draw7(); }
       });
 
       const bEl = el.querySelector('#b7');
@@ -259,7 +287,13 @@
           marginPerBundleRub: p.margin * 1000, maxMarginShare: 0.24, depthLots: p.depth
         });
         const ih = E.integerHedgeResiduals({ beta: p.beta, priceA: 32000, priceB: 32000, maxLotsA: Math.max(1, sz.qFinal) });
-        const bestH = ih.candidates[ih.candidates.length - 1]; // при целевом числе связок qFinal
+        const bestH = ih.candidates[ih.candidates.length - 1];
+        const chk = E.evalPreTradeChecklist({
+          signalAgeMin: s7.sigAge, ttlMin: 45,
+          depthOk: p.depth >= 8, edgeBeatsStressCost: true,
+          noBreakFlag: true, withinMarginAndCap: sz.qFinal >= 1,
+          sessionSafe: true, liveSlipRatio: s7.slipRatio
+        });
 
         const rows = [
           ['1. Vol-targeting (бюджет риска дня ÷ σ_20)', sz.qVol, sz.bindingId === 'vol'],
@@ -278,13 +312,26 @@
             '</tr>').join('') +
           '</table>';
 
+        el.querySelector('#chk7').innerHTML =
+          '<div style="background:#10151f;border:1px solid #262e3f;border-radius:8px;padding:8px 10px;font-size:12.5px">' +
+            '<b>Pre-trade checklist контура Monitor (§8.5):</b>' +
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 12px;margin-top:4px">' +
+              chk.items.map((it) => '<div>' + (it.ok ? '<b style="color:' + ME + '">✓</b> ' : '<b style="color:' + BAD + '">✗</b> <span style="color:' + BAD + '">') + it.label + (it.ok ? '' : '</span>') + '</div>').join('') +
+            '</div>' +
+            (chk.driftWarn ? '<div style="color:' + BAD + ';margin-top:6px"><b>⚠ Тревога Backtest vs Live:</b> фактическое проскальзывание в ' + f(s7.slipRatio) + '× выше модели — подача тикетов остановлена до перекалибровки издержек!</div>' : '') +
+          '</div>';
+
         const legs = p.code.split('/').map((x) => x.trim());
-        el.querySelector('#ticket7').innerHTML =
+        const tEl = el.querySelector('#ticket7');
+        tEl.className = chk.canSend ? 'note' : 'note bad';
+        tEl.innerHTML =
           '<b>Предзаполненный полуавтоматический тикет (§6.6 — QUIK / Transaq / FIX payload):</b><br>' +
           '• Связка: <b>' + p.code + '</b> (' + p.driver + ') · каузальное СКО <code>σ_20 = ' + Math.round(sigRub).toLocaleString('ru-RU') + ' ₽/день</code><br>' +
           '• Итоговый объём после округления вниз: <b style="color:' + ME + '">' + sz.qFinal + ' связок</b> → нога 1 (<code>' + legs[0] + '</code>): <b>' + bestH.lotsA + ' лот.</b>, нога 2 (<code>' + (legs[1] || 'LegB') + '</code>): <b>' + bestH.lotsB + ' лот.</b> (остаток округления ' + pct(bestH.residualPct, 1) + ')<br>' +
           '• Требуемое ГО: <b>' + Math.round(sz.marginUsedRub / 1000) + ' тыс. ₽</b> · ожидаемый дневной риск позиции: <b>' + Math.round(sz.realizedDailyRiskRub).toLocaleString('ru-RU') + ' ₽</b><br>' +
-          '<span style="color:' + GOLD + '">Статус безопасности: ордер подготовлен, но НЕ отправляется без ручного подтверждения трейдера (pre-trade checklist пройден).</span>';
+          (chk.canSend
+            ? '<span style="color:' + GOLD + '">Статус: все 6 проверок Monitor и сверка Backtest/Live пройдены ✓ — тикет готов к ручному подтверждению человеком.</span>'
+            : '<b>⛔ ОТПРАВКА ЗАБЛОКИРОВАНА ШЛЮЗОМ MONITOR:</b> устраните проваленный пункт чек-листа (просроченный TTL или расхождение проскальзывания)!');
       }
       draw7();
     }

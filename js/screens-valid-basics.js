@@ -9,6 +9,104 @@
   const pct = (v, d) => U.fmt(v * 100, d === undefined ? 0 : d) + '%';
   const col = (x, d) => '<span class="' + (x >= 0 ? 'pos' : 'neg') + '">' + U.sgn(x, d === undefined ? 2 : d) + '</span>';
 
+  /* ---------- 0. Метрики эффективности без самообмана: Sharpe, Sortino, Calmar и хвосты (§5.8) ---------- */
+  const s0 = { rfRate: 16.0, tailCrash: 4.6 };
+
+  Z.push({
+    id: 'metrics-primer',
+    title: 'Чем мерить стратегию: Sharpe (×√252 и ставка ЦБ), Sortino, Calmar и хвосты',
+    lead: 'Прежде чем проверять стратегии на переобучение, договоримся о линейке: почему голых пунктов прибыли недостаточно, откуда в годовом Шарпе берётся √252, зачем на MOEX вычитать ключевую ставку и что прячут скошенность с эксцессом.',
+    text: () => `
+      <h3>${T('sharpe_ratio', 'Коэффициент Шарпа')} простыми словами</h3>
+      <p>Две стратегии заработали за год по <code>+24%</code>, но первая шла ровно, а вторая трижды роняла счёт на треть. Чтобы сравнить <i>цену нервов</i>, делят среднюю дневную доходность <b>сверх безрисковой ставки</b> на дневной разброс <code>σ_дн</code> и переводят в годовой масштаб:</p>
+      <span class="formula">Sharpe_год = ((R̄_дн − r_безр ÷ 252) ÷ σ_дн) × √252<small>Почему × √252 ≈ 15,87, а не × 252? За 252 торговых дня средний доход копится в 252 раза, а разброс независимых шагов — в √252 раз (252 ÷ √252 = √252).</small></span>
+      <ul>
+        <li><b>Поправка на ставку ЦБ (<code>r_безр</code>):</b> заработать <code>+14%</code> на счёте, когда фонд денежного рынка или ОФЗ под ГО дают <code>16–19%</code> без риска, — значит сработать в <i>отрицательный</i> честный Sharpe!</li>
+        <li><b>${T('sortino_calmar', 'Sortino и Calmar')} (§5.8):</b> обычный Шарп одинаково штрафует и за обвал вниз, и за резкий всплеск прибыли вверх. <b>Sortino</b> оставляет в знаменателе только минусовые дни, а <b>Calmar</b> делит годовой избыточный доход на максимальную просадку <code>MaxDD</code>.</li>
+        <li><b>${T('skew_kurt', 'Скошенность и избыточный эксцесс κ')}:</b> у возвратных стратегий часты мелкие плюсы и редкие обрывы (<i>отрицательная скошенность</i> и <i>толстые хвосты</i> <code>κ &gt; 0</code>) — на коротком отрезке их «сырой Шарп» обманчиво высок до первого срыва!</li>
+      </ul>`,
+    mount(el) {
+      el.innerHTML = `
+        <div class="viz">
+          <h4>Две стратегии за 252 дня: одинаковый валовый доход, но разная форма хвостов</h4>
+          <div id="sl0a"></div>
+          <div id="sl0b"></div>
+          <div id="kpi0" style="margin:10px 0"></div>
+          <div class="legend">
+            <span><i style="background:${ME}"></i>Стратегия Б: ровный спред со стопом</span>
+            <span><i style="background:${BAD}"></i>Стратегия А: «зёрнышки перед обрывом» (хвостовой срыв)</span>
+            <span><i style="background:${GOLD}"></i>безрисковая планка (вклад / LQDT)</span>
+          </div>
+          <div id="c0"></div>
+          <table class="t" id="tab0" style="margin-top:10px"></table>
+        </div>`;
+
+      HV.slider(el.querySelector('#sl0a'), {
+        label: 'Безрисковая рублёвая ставка r_безр (ключевая / денежный рынок)', min: 0, max: 22, step: 1, value: s0.rfRate,
+        fmt: (v) => v + '% годовых',
+        onInput: (v) => { s0.rfRate = v; draw0(); }
+      });
+      HV.slider(el.querySelector('#sl0b'), {
+        label: 'Глубина редкого хвостового срыва у Стратегии А (2 дня из 252)', min: 1.5, max: 7.5, step: 0.5, value: s0.tailCrash,
+        fmt: (v) => '−' + f(v, 1) + '% за удар',
+        onInput: (v) => { s0.tailCrash = v; draw0(); }
+      });
+
+      let eqA = [], eqB = [], eqRf = [];
+      const c0 = A.mkChart(el.querySelector('#c0'), 185, {
+        tip: (i) => '<b>День ' + (i + 1) + '</b><br>' +
+          '<span style="color:' + ME + '">Ровная Б: <b>+' + f(eqB[i], 1) + '%</b></span><br>' +
+          '<span style="color:' + BAD + '">Хвостовая А: <b>' + U.sgn(eqA[i], 1) + '%</b></span><br>' +
+          '<span style="color:' + GOLD + '">Безрисковая: +' + f(eqRf[i], 1) + '%</span>'
+      });
+
+      function draw0() {
+        const rng = E.mulberry32(31);
+        const retA = [], retB = [];
+        const targetSum = 24.0; // обе целятся около +24% за год
+        const baseGainA = (targetSum + 2 * s0.tailCrash) / 250;
+        let aAcc = 0, bAcc = 0, rAcc = 0;
+        eqA = []; eqB = []; eqRf = [];
+        for (let i = 0; i < 252; i++) {
+          const n1 = (rng() + rng() - 1) * 0.42;
+          const rB = (targetSum / 252) + n1;
+          const rA = (i === 88 || i === 196) ? -s0.tailCrash : baseGainA + (rng() - 0.5) * 0.14;
+          retB.push(rB);
+          retA.push(rA);
+          aAcc += rA; bAcc += rB; rAcc += s0.rfRate / 252;
+          eqA.push(aAcc); eqB.push(bAcc); eqRf.push(rAcc);
+        }
+        const mA = E.riskAdjustedMetrics(retA, s0.rfRate);
+        const mB = E.riskAdjustedMetrics(retB, s0.rfRate);
+
+        el.querySelector('#kpi0').innerHTML =
+          '<div class="kpis">' +
+            '<div class="kpi"><div class="v">' + f(mB.srRaw) + ' → <span style="color:' + (mB.srExcess > 0.5 ? ME : BAD) + '">' + U.sgn(mB.srExcess) + '</span></div><div class="l">Sharpe Б (сырой → сверх ЦБ)</div><div class="e">после вычета ' + s0.rfRate + '% год.</div></div>' +
+            '<div class="kpi"><div class="v" style="color:' + BAD + '">' + U.sgn(mA.skew, 1) + ' / +' + f(Math.max(0, mA.exKurt), 1) + '</div><div class="l">скошенность / эксцесс κ у А</div><div class="e">ловушка редких обрывов!</div></div>' +
+            '<div class="kpi"><div class="v" style="color:' + ME + '">' + f(mB.calmar, 1) + ' vs ' + f(mA.calmar, 1) + '</div><div class="l">Calmar (Б против А)</div><div class="e">учёт глубины ямы MaxDD</div></div>' +
+          '</div>';
+
+        c0.render({
+          n: 252,
+          series: [
+            { data: eqRf, color: GOLD, width: 1.4, dash: [4, 4] },
+            { data: eqA, color: BAD, width: 1.9 },
+            { data: eqB, color: ME, width: 2.3 }
+          ]
+        });
+
+        el.querySelector('#tab0').innerHTML =
+          '<tr><th>Показатель за 252 дня</th><th>Стратегия Б (ровная)</th><th>Стратегия А (с хвостовым срывом)</th></tr>' +
+          '<tr><td>Годовой доход (валовый / сверх ставки ЦБ)</td><td>+' + f(mB.annRet, 1) + '% / ' + col(mB.annExRet, 1) + '%</td><td>+' + f(mA.annRet, 1) + '% / ' + col(mA.annExRet, 1) + '%</td></tr>' +
+          '<tr><td>Честный годовой Sharpe (сверх r_безр)</td><td class="pos"><b>' + U.sgn(mB.srExcess) + '</b></td><td>' + U.sgn(mA.srExcess) + '</td></tr>' +
+          '<tr><td>Sortino (штраф только за минусы)</td><td class="pos"><b>' + U.sgn(mB.sortino) + '</b></td><td class="neg">' + U.sgn(mA.sortino) + '</td></tr>' +
+          '<tr><td>Макс. просадка MaxDD / коэффициент Calmar</td><td>−' + f(mB.maxDD, 1) + '% / <b>' + f(mB.calmar) + '</b></td><td class="neg">−' + f(mA.maxDD, 1) + '% / <b>' + f(mA.calmar) + '</b></td></tr>' +
+          '<tr><td>Скошенность / избыточный эксцесс κ</td><td>' + U.sgn(mB.skew) + ' / ' + U.sgn(mB.exKurt) + '</td><td class="neg"><b>' + U.sgn(mA.skew) + ' / +' + f(Math.max(0, mA.exKurt), 1) + '</b></td></tr>';
+      }
+      draw0();
+    }
+  });
+
   /* ---------- 1. Walk-Forward, purging/embargo и неприкосновенный holdout ---------- */
   const s1 = { peBars: 0 };
 

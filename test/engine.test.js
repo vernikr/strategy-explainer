@@ -585,7 +585,7 @@ for (const sc of E.BASKET_SCENARIOS) {
 {
   // USDRUBF: шаг R = 0.01, стоимость шага W = 10 ₽ -> рост с 90.20 до 91.45 даёт +1250 ₽ на 1 лот
   close(E.calcVM(90.20, 91.45, 0.01, 10, 1), 1250, 1e-9);
-  // MIX против MMI (номиналы 300 000 ₽ и 30 000 ₽) -> 1 MIX : 10 MMI
+  // MIX против MXI (номиналы 300 000 ₽ и 30 000 ₽) -> 1 MIX : 10 MXI
   const mm = E.matchContractLots(300000, 30000, 5);
   assert.strictEqual(mm.qA, 1);
   assert.strictEqual(mm.qB, 10);
@@ -1009,6 +1009,33 @@ for (const sc of E.MOEX_SCENARIOS) {
   assert(agg.expiry_crunch.tMs > 40 && agg.expiry_crunch.tBz < 0 && agg.expiry_crunch.tRl < -150);
   assert(agg.pure_noise_overfit.tMs > agg.pure_noise_overfit.tBb + 150 && agg.pure_noise_overfit.tMs > agg.pure_noise_overfit.tRl + 150);
   assert(agg.clean_reversion.tMs > 150 && agg.clean_reversion.tBb < 0);
+}
+
+// 50. Метрики риска/доходности (§5.8), 5 жёстких гейтов, композитный скор (§7.1–7.5) и pre-trade checklist (§8.5)
+{
+  const steady = [], cliff = [];
+  for (let i = 0; i < 252; i++) {
+    steady.push(i % 2 === 0 ? 0.22 : -0.06);
+    cliff.push((i === 90 || i === 195) ? -4.8 : 0.12);
+  }
+  const mSteady = E.riskAdjustedMetrics(steady, 16);
+  const mCliff = E.riskAdjustedMetrics(cliff, 16);
+  assert(mSteady.srExcess < mSteady.srRaw);
+  assert(mCliff.skew < -1.5 && mCliff.exKurt > 3.0);
+  assert(mSteady.sortino > mCliff.sortino && mSteady.calmar > mCliff.calmar);
+
+  const p17 = E.SCREENER_POOL_SAMPLE[0];
+  const g17 = E.evalHardGates(p17);
+  const cs17 = E.calcCompositeScore(p17.comp, [0.25, 0.25, 0.15, 0.20, 0.15]);
+  assert(g17.passed && Math.abs(cs17.score - 0.8265) < 1e-6); // 0.8265 -> 0.83 при округлении до сотых (§7.5)
+
+  const pThin = E.SCREENER_POOL_SAMPLE[4];
+  assert(!E.evalHardGates(pThin).passed);
+
+  const chkOk = E.evalPreTradeChecklist({ signalAgeMin: 10, ttlMin: 45, liveSlipRatio: 1.05 });
+  const chkExpired = E.evalPreTradeChecklist({ signalAgeMin: 65, ttlMin: 45, liveSlipRatio: 1.05 });
+  const chkDrift = E.evalPreTradeChecklist({ signalAgeMin: 10, ttlMin: 45, liveSlipRatio: 1.65 });
+  assert(chkOk.canSend && !chkExpired.canSend && !chkDrift.canSend && chkDrift.driftWarn);
 }
 
 console.log('OK: все проверки пройдены');

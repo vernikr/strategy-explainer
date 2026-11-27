@@ -10,6 +10,95 @@
   const pct = (v, d) => U.fmt(v * 100, d === undefined ? 0 : d) + '%';
   const col = (x, d) => '<span class="' + (x >= 0 ? 'pos' : 'neg') + '">' + U.sgn(x, d === undefined ? 1 : d) + '</span>';
 
+  /* ---------- 0. Конвейер скринера: 5 жёстких гейтов, композитный скор и бейджи досье (§1.3, §7.1–7.4) ---------- */
+  const s0 = { candIdx: 0 };
+  const COMP_NAMES = [
+    ['1. Торгуемость (вес 25%)', 'глубина стакана, узкий спред, 4 слоя издержек'],
+    ['2. Структура связи (вес 25%)', 'коинтеграция, стационарность, полураспад, здоровье'],
+    ['3. Возможность сейчас (вес 15%)', 'текущее отклонение спреда и шанс схождения'],
+    ['4. Робастность (вес 20%)', 'плато параметров, низкий PBO, высокий DSR'],
+    ['5. Риск и маржа (вес 15%)', 'доходность на ГО (RoM), просадка, стресс 2× cost']
+  ];
+
+  Z.push({
+    id: 'screener-pipeline',
+    title: 'Конвейер скринера: 5 входных гейтов, композитный скор и бейджи досье',
+    lead: 'Прежде чем собирать книгу позиций, посмотрим на весь путь пары сверху вниз: почему скринер устроен как конвейер с жёсткими шлюзами, из каких пяти осей складывается скор 0,83 и чем бейджи состояния отличаются от вердикта PASS.',
+    text: () => `
+      <h3>Пять ступеней конвейера (§1.3): сначала сузить, потом понять, потом действовать</h3>
+      <p>Продукт — это не бесконечная таблица с сортировкой по одному столбцу, а строгая цепочка <b>POOL → SHORTLIST → VALIDATE → BOOK → MONITOR</b>:</p>
+      <ol>
+        <li><b>${T('hard_gates', 'Пять жёстких гейтов до скоринга')} (§7.1):</b> минимум истории, живой стакан, запас дней до экспирации, исполнимый целый хедж и положительный чистый край после издержек. Провал любого пункта = <b>отсев без расчёта рейтинга</b> (нельзя «отыграть» пустой стакан красивой статистикой!).</li>
+        <li><b>${T('composite_score', 'Композитный скор из 5 осей')} (§7.2):</b> выжившие пары оцениваются взвешенной суммой <code>0,25·Торгуемость + 0,25·Структура + 0,15·Возможность + 0,20·Робастность + 0,15·Риск</code>. <b>Важно:</b> веса задаются продуктово и прозрачно — «подбирать веса на истории» запрещено, чтобы не устроить второе переобучение!</li>
+        <li><b>Два разных семейства меток (§7.4, §8.2):</b> ${T('takeaway_badges', 'takeaway-бейджи')} (<i>Tradable, Thin, Break-risk, Cost-heavy, Expiry-risk</i>) диагностируют текущее состояние пары, а промоушн-гейт <b>PASS / BORDERLINE / REJECT</b> решает допуск конфигурации в работу.</li>
+      </ol>`,
+    mount(el) {
+      const cands = E.SCREENER_POOL_SAMPLE;
+      el.innerHTML = `
+        <div class="viz">
+          <h4>Воронка конвейера и досье пары (кликните любого из 6 кандидатов пула!)</h4>
+          <div style="display:flex;gap:4px;margin:0 0 10px;font-size:11.5px;font-weight:700;text-align:center">
+            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px">1. POOL (6)</div>
+            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px;color:${PRE}">2. SHORTLIST (4)</div>
+            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px;color:${GOLD}">3. VALIDATE (2 PASS)</div>
+            <div style="flex:1;padding:6px 4px;background:#182030;border:1px solid #2b364d;border-radius:6px;color:${ME}">4. BOOK → 5. MONITOR</div>
+          </div>
+          <div class="btns" id="b0" style="margin:0 0 10px"></div>
+          <div id="dossier0"></div>
+        </div>`;
+
+      const bEl = el.querySelector('#b0');
+      bEl.innerHTML = cands.map((c, i) => '<button class="b" data-i="' + i + '">' + c.code + '</button>').join('');
+      bEl.addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (b) { s0.candIdx = +b.dataset.i; draw0(); } });
+
+      function draw0() {
+        bEl.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === s0.candIdx));
+        const c = cands[s0.candIdx];
+        const gt = E.evalHardGates(c);
+        const cs = E.calcCompositeScore(c.comp);
+
+        const vCol = c.verdict === 'PASS' ? ME : (c.verdict === 'BORDERLINE' ? GOLD : BAD);
+        const vText = c.verdict === 'GATE_FAIL' ? 'НЕ ПРОШЛА ВХОДНОЙ ГЕЙТ (не скорится!)' : ('ВЕРДИКТ ВАЛИДАЦИИ: ' + c.verdict);
+        const badgePills = c.badges.map((b) => {
+          const good = b === 'Tradable' || b === 'Robust';
+          return '<span class="pill ' + (good ? 'go' : 'stop') + '">' + b + '</span>';
+        }).join('');
+
+        const gateRows = gt.checks.map((g) =>
+          '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1d2432;font-size:12.5px">' +
+            '<span>' + (g.ok ? '<b style="color:' + ME + '">✓</b> ' : '<b style="color:' + BAD + '">✗</b> ') + g.label + '</span>' +
+            '<b style="color:' + (g.ok ? '#dce4f2' : BAD) + '">' + g.val + '</b>' +
+          '</div>'
+        ).join('');
+
+        const compBars = gt.passed
+          ? COMP_NAMES.map((nm, k) => {
+              const p = cs.parts[k];
+              return '<div style="margin-top:6px;font-size:12.5px">' +
+                '<div style="display:flex;justify-content:space-between"><span><b>' + nm[0] + '</b> <span style="color:#8b96ab">(' + nm[1] + ')</span></span><b>' + f(p.raw) + ' → +' + f(p.contrib, 3) + '</b></div>' +
+                '<div style="height:7px;background:#151c28;border-radius:4px;overflow:hidden;margin-top:2px"><div style="width:' + (p.raw * 100).toFixed(0) + '%;height:100%;background:' + (p.raw >= 0.7 ? ME : (p.raw >= 0.5 ? GOLD : BAD)) + '"></div></div>' +
+              '</div>';
+            }).join('')
+          : '<div class="note bad" style="margin-top:8px"><b>Скоринг заблокирован гейтом §7.1:</b> ' + c.failWhy + '. Пары с неисполнимой торговой механикой никогда не попадают в рейтинг шорт-листа.</div>';
+
+        el.querySelector('#dossier0').innerHTML =
+          '<div style="background:#10151f;border:1px solid #262e3f;border-radius:10px;padding:12px">' +
+            '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">' +
+              '<div><b style="font-size:15px">' + c.code + '</b> <span style="color:#98a3b6">· ' + c.name + '</span></div>' +
+              '<div style="color:' + vCol + ';font-weight:700;font-size:13.5px">' + vText + '</div>' +
+            '</div>' +
+            '<div style="margin-bottom:8px"><span style="font-size:12.5px;color:#98a3b6">Takeaway-бейджи состояния (§8.2): </span>' + badgePills +
+              (gt.passed ? '<span style="float:right;font-size:14px">Композитный скор: <b style="color:' + ME + '">' + f(cs.score) + '</b></span>' : '') +
+            '</div>' +
+            '<div style="margin-bottom:8px"><b style="font-size:12.5px;color:#98a3b6">Этап 1 (POOL → SHORTLIST): 5 пороговых гейтов</b>' + gateRows + '</div>' +
+            compBars +
+            (c.failWhy && gt.passed ? '<div class="note ' + (c.verdict === 'BORDERLINE' ? 'warn' : 'bad') + '" style="margin:10px 0 0">' + c.failWhy + '</div>' : '') +
+          '</div>';
+      }
+      draw0();
+    }
+  });
+
   /* ---------- 1. Vol-targeting и парабола дробного Келли ---------- */
   const s1 = { haircut: 0.70, kurt: 3.0, clones: 1, storm: 1.0 };
 

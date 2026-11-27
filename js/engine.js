@@ -1668,7 +1668,7 @@
   }
 
   /* Подбор целых лотов для выравнивания денежного номинала двух контрактов с разной контрактной экономикой
-     (например, полный MIX и мини-фьючерс MMI 1:10 или Si и USDRUBF). */
+     (например, полный MIX и мини-фьючерс MXI 1:10 или Si и USDRUBF). */
   function matchContractLots(nomA, nomB, maxA) {
     const lim = maxA || 10;
     const ratio = nomA / nomB;
@@ -5135,8 +5135,135 @@
     };
   }
 
+  /* =========================================================================
+   * Метрики риска/доходности (§5.8), воронка конвейера и предторговый чек-лист (§7.1–7.5, §8.5)
+   * ========================================================================= */
+  function riskAdjustedMetrics(dailyRetPct, rfAnnualPct) {
+    const n = dailyRetPct.length;
+    if (!n) return { annRet: 0, annVol: 0, srRaw: 0, srExcess: 0, sortino: 0, calmar: 0, maxDD: 0, skew: 0, exKurt: 0 };
+    const rfDay = (rfAnnualPct || 0) / 252;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += dailyRetPct[i];
+    const mean = sum / n;
+    const exMean = mean - rfDay;
+    let m2 = 0, m3 = 0, m4 = 0, down2 = 0;
+    let eq = 0, peak = 0, maxDD = 0;
+    for (let i = 0; i < n; i++) {
+      const d = dailyRetPct[i] - mean;
+      m2 += d * d;
+      m3 += d * d * d;
+      m4 += d * d * d * d;
+      const ex = dailyRetPct[i] - rfDay;
+      if (ex < 0) down2 += ex * ex;
+      eq += dailyRetPct[i];
+      if (eq > peak) peak = eq;
+      if (peak - eq > maxDD) maxDD = peak - eq;
+    }
+    const variance = m2 / Math.max(1, n - 1);
+    const sd = Math.sqrt(Math.max(1e-12, variance));
+    const downSd = Math.sqrt(Math.max(1e-12, down2 / n));
+    const sqrt252 = Math.sqrt(252);
+    const annRet = mean * 252;
+    const annExRet = exMean * 252;
+    const annVol = sd * sqrt252;
+    const srRaw = (mean / sd) * sqrt252;
+    const srExcess = (exMean / sd) * sqrt252;
+    const sortino = (exMean / downSd) * sqrt252;
+    const calmar = maxDD > 1e-6 ? annExRet / maxDD : 0;
+    const popSd = Math.sqrt(Math.max(1e-12, m2 / n));
+    const skew = (m3 / n) / Math.pow(popSd, 3);
+    const exKurt = (m4 / n) / Math.pow(popSd, 4) - 3;
+    return { annRet, annExRet, annVol, srRaw, srExcess, sortino, calmar, maxDD, skew, exKurt };
+  }
 
-  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, tripleBarrierLabel, kaplanMeierSurvival, fitMetaLabeler, predictMetaProb, conformalInterval, evalRlSafeguards, ML_SCENARIOS, genMlScenario, mlBarFeatures, backtestMlApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
+  const SCREENER_POOL_SAMPLE = [
+    {
+      code: 'P17 · GD / SV', name: 'Золото против серебра (эталон §7.5)',
+      histDays: 980, depthLots: 22, expDays: 42, hedgeResidPct: 0.8, netEdgeBps: 35,
+      comp: [0.85, 0.90, 0.60, 0.88, 0.82], verdict: 'PASS', worstRegimeSR: 0.94,
+      badges: ['Tradable', 'Robust'], failWhy: ''
+    },
+    {
+      code: 'P04 · Si-ближ / дальн', name: 'Календарь курс доллар/рубль',
+      histDays: 1100, depthLots: 40, expDays: 55, hedgeResidPct: 0.0, netEdgeBps: 28,
+      comp: [0.94, 0.86, 0.72, 0.84, 0.85], verdict: 'PASS', worstRegimeSR: 1.12,
+      badges: ['Tradable', 'Robust'], failWhy: ''
+    },
+    {
+      code: 'P11 · LKOH / ROSN', name: 'Спред нефтяных мейджоров',
+      histDays: 860, depthLots: 26, expDays: 38, hedgeResidPct: 2.4, netEdgeBps: 24,
+      comp: [0.82, 0.80, 0.76, 0.72, 0.78], verdict: 'BORDERLINE', worstRegimeSR: 0.38,
+      badges: ['Tradable', 'Fragile'], failWhy: 'Плато 64% < 70% (в допуске → BORDERLINE)'
+    },
+    {
+      code: 'P19 · SBER / VTBR', name: 'Звезда штиля (провал в 2022)',
+      histDays: 1020, depthLots: 36, expDays: 44, hedgeResidPct: 1.9, netEdgeBps: 31,
+      comp: [0.92, 0.78, 0.88, 0.35, 0.44], verdict: 'REJECT', worstRegimeSR: -1.35,
+      badges: ['Tradable', 'Break-risk'], failWhy: 'Провал стресс-блока 2022 и PBO 0,61 > 0,50'
+    },
+    {
+      code: 'P23 · Эшелон-2 (тонкий)', name: 'Редкий фьючерс второго эшелона',
+      histDays: 640, depthLots: 2, expDays: 35, hedgeResidPct: 3.1, netEdgeBps: -12,
+      comp: [0.15, 0.84, 0.79, 0.60, 0.50], verdict: 'GATE_FAIL', worstRegimeSR: -0.80,
+      badges: ['Thin', 'Cost-heavy'], failWhy: 'Отсечён до скоринга: пустой стакан (2 лота) и издержки > края'
+    },
+    {
+      code: 'P29 · BR-истекающий', name: 'Ближняя нефть за 4 дня до экспирации',
+      histDays: 750, depthLots: 28, expDays: 4, hedgeResidPct: 0.0, netEdgeBps: 19,
+      comp: [0.86, 0.82, 0.74, 0.77, 0.62], verdict: 'GATE_FAIL', worstRegimeSR: 0.25,
+      badges: ['Expiry-risk'], failWhy: 'Отсечён до скоринга: до экспирации 4 дн. < среднего удержания (8 дн.)'
+    }
+  ];
+
+  function evalHardGates(cand, rules) {
+    const r = Object.assign({ minHist: 250, minDepth: 8, minExpDays: 10, maxResidPct: 8.0, minNetEdgeBps: 8 }, rules || {});
+    const checks = [
+      { id: 'hist', label: '1. Минимум истории (≥ ' + r.minHist + ' дн.)', ok: cand.histDays >= r.minHist, val: cand.histDays + ' дн.' },
+      { id: 'liq', label: '2. Ликвидность стакана (≥ ' + r.minDepth + ' лот.)', ok: cand.depthLots >= r.minDepth, val: cand.depthLots + ' лот.' },
+      { id: 'exp', label: '3. Запас до экспирации (≥ ' + r.minExpDays + ' дн.)', ok: cand.expDays >= r.minExpDays, val: cand.expDays + ' дн.' },
+      { id: 'hedge', label: '4. Целочисленный хедж (перекос ≤ ' + r.maxResidPct + '%)', ok: cand.hedgeResidPct <= r.maxResidPct, val: cand.hedgeResidPct.toFixed(1) + '%' },
+      { id: 'edge', label: '5. Чистый край > издержек (≥ +' + r.minNetEdgeBps + ' б.п.)', ok: cand.netEdgeBps >= r.minNetEdgeBps, val: (cand.netEdgeBps >= 0 ? '+' : '') + cand.netEdgeBps + ' б.п.' }
+    ];
+    return { passed: checks.every((c) => c.ok), checks };
+  }
+
+  function calcCompositeScore(comp, weights) {
+    const w = weights || [0.25, 0.25, 0.15, 0.20, 0.15];
+    let wSum = 0;
+    for (let i = 0; i < w.length; i++) wSum += w[i];
+    const norm = wSum > 0 ? wSum : 1;
+    const parts = [];
+    let total = 0;
+    for (let i = 0; i < 5; i++) {
+      const wn = w[i] / norm;
+      const contrib = (comp[i] || 0) * wn;
+      parts.push({ raw: comp[i] || 0, weight: wn, contrib });
+      total += contrib;
+    }
+    return { score: total, parts };
+  }
+
+  function evalPreTradeChecklist(st) {
+    const s = Object.assign({
+      inSignalZone: true, signalAgeMin: 12, ttlMin: 45,
+      depthOk: true, edgeBeatsStressCost: true,
+      noBreakFlag: true, withinMarginAndCap: true,
+      sessionSafe: true, liveSlipRatio: 1.08
+    }, st || {});
+    const ttlOk = s.inSignalZone && s.signalAgeMin <= s.ttlMin;
+    const items = [
+      { id: 'ttl', label: '1. Спред в сигнальной зоне и TTL не истёк (' + s.signalAgeMin + ' ≤ ' + s.ttlMin + ' мин)', ok: ttlOk },
+      { id: 'liq', label: '2. Глубина и синхронность обеих ног ≥ порога', ok: !!s.depthOk },
+      { id: 'cost', label: '3. Ожидаемый край перекрывает издержки и полуспред', ok: !!s.edgeBeatsStressCost },
+      { id: 'health', label: '4. Индикатор здоровья без флага разрыва связи', ok: !!s.noBreakFlag },
+      { id: 'size', label: '5. Объём внутри лимитов стресс-ГО и capacity стакана', ok: !!s.withinMarginAndCap },
+      { id: 'sess', label: '6. Основная сессия (вдали от клиринга и планок цены)', ok: !!s.sessionSafe }
+    ];
+    const driftWarn = s.liveSlipRatio > 1.35;
+    return { canSend: items.every((x) => x.ok) && !driftWarn, items, driftWarn, liveSlipRatio: s.liveSlipRatio };
+  }
+
+  const api = { generate, ols, roundK, hedgeStats, explainHedge, backtestHedge, HEDGE_SCENARIOS, genHedge, dfCrit, egCrit, dfTest, cointTest, rollingCoint, explainCoint, genPair, COINT_SCENARIOS, genCoint, COINT_POOL_SPECS, genCointPool, backtestCoint, carryFair, CAL_SERIES_NAMES, CAL_SCENARIOS, genCalendar, genCalScenario, backtestCalendar, explainCalendar, genTactics, TACTIC_SCENARIOS, genTacticScenario, volRegime, backtestTactics, explainTactics, fxParity, FX_SCENARIOS, genFxSpread, genFxScenario, backtestFx, explainFx, olsMulti, basketCrit, roundBasketLots, BASKET_SCENARIOS, genBasket, genBasketScenario, backtestBasket, explainBasket, calcVM, matchContractLots, decomposeCosts, calcRoM, MOEX_SCENARIOS, genMoex, genMoexScenario, backtestMoex, explainMoex, tls, theilSen, kalmanHedge, kpssTest, hurstExp, stationarityMatrix, halfLifeDist, cusumBreak, calcERT, DIAG_SCENARIOS, genDiag, genDiagScenario, backtestDiag, explainDiag, normCdf, ouFit, ouCycleMetrics, bertramBands, volAdaptiveBands, carryOverlayBands, BAND_SCENARIOS, genBand, genBandScenario, backtestBands, explainBands, normInv, t2Inv, t3Cdf, hmmEntropy, hmmStep, regimeGate, hmmFilter, copulaParamFromTau, copulaH, copulaTailDep, copulaSample2D, fastWindowTau, mispricingIndex, REGIME_SCENARIOS, genRegime, genRegimeScenario, prepareRegimeFeatures, backtestRegimeCopula, explainRegimeCopula, returnStats, riskAdjustedMetrics, SCREENER_POOL_SAMPLE, evalHardGates, calcCompositeScore, evalPreTradeChecklist, calcPSR, expectedMaxSR, calcDSR, quickSpreadRun, VALID_N_GRID, VALID_Z_GRID, paramSurface, CPCV_SPLITS_6_3, runCPCV, blockBootstrapCI, costStressTest, evalPromotionGate, VALID_SCENARIOS, genValidScenario, backtestValidApproaches, kellyCurve, capacityCurve, integerHedgeResiduals, sizePosition, BOOK_PAIR_SPECS, BOOK_SCENARIOS, genBookUniverse, pairCorrGraph, bookMetrics, greedySubmodularSelect, backtestBookApproaches, tripleBarrierLabel, kaplanMeierSurvival, fitMetaLabeler, predictMetaProb, conformalInterval, evalRlSafeguards, ML_SCENARIOS, genMlScenario, mlBarFeatures, backtestMlApproaches, rolling, ewma, robust, explainRobust, median, MAD_SCALE, explainEwma, alphaOf, halfLife, weightShare, explainBar, decide, backtest, sweep, tune, spiky, tailTwoSided, DEFAULTS, mulberry32, round2 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
