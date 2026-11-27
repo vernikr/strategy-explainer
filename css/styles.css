@@ -142,6 +142,8 @@ body {
   top: 0;
   z-index: 20;
 }
+html[data-theme="claude"] body { line-height: 1.5; }
+
 html[data-theme="claude"] .top {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -432,7 +434,7 @@ html[data-theme="claude"] .screen h1 {
 .screen .lead { margin: 0 0 26px; font-size: 18px; color: var(--muted); max-width: 980px; }
 html[data-theme="claude"] .screen .lead {
   font-size: 17px;
-  line-height: 1.55;
+  line-height: 1.45;                      /* лид крупнее — чуть плотнее базового 1.5 */
   color: var(--muted);
   font-weight: 400;
 }
@@ -446,7 +448,7 @@ html[data-theme="claude"] .text {
   color: var(--text);
   font-family: var(--font-prose);
   font-size: 15.5px;
-  line-height: 1.66;
+  line-height: 1.5;                       /* базовый интерлиньяж основного текста */
 }
 /* Мелкие акцентные надписи внутри статьи остаются без засечек */
 html[data-theme="claude"] .text :is(.pill, .kpi, .kpis, .legend, .cap, .btns, .viz, .tag, .badge, small, label, button, input, select, figcaption, .formula small) {
