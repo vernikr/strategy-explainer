@@ -14,7 +14,7 @@
       grid: 'rgba(222, 220, 209, 0.085)', axis: '#9c9a92', text: '#c3c1b7',
       a: '#6aabf1', b: '#e5a93b', spread: '#d97757', mean: '#b4a5f6', z: '#d97757',
       up: '#6bc978', down: '#eb6263', exit: '#e5a93b', neutral: '#9c9a92',
-      labelBg: 'rgba(33, 33, 32, 0.88)', cursor: 'rgba(250, 249, 245, 0.34)', hover: 'rgba(250, 249, 245, 0.24)',
+      labelBg: 'rgba(25, 25, 25, 0.88)', cursor: 'rgba(250, 249, 245, 0.34)', hover: 'rgba(250, 249, 245, 0.24)',
       font: '11px "anthropic-sans", "Styrene B LC", -apple-system, "Segoe UI", sans-serif'
     }
   };

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>Стратегии простыми словами</title>
   <meta name="viewport" content="width=1536">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23212120'/%3E%3Ctext x='20' y='28' text-anchor='middle' font-family='Georgia,serif' font-size='26' fill='%23d97757'%3E%CF%83%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23191919'/%3E%3Ctext x='20' y='28' text-anchor='middle' font-family='Georgia,serif' font-size='26' fill='%23d97757'%3E%CF%83%3C/text%3E%3C/svg%3E">
   <link rel="preload" href="fonts/AnthropicInterface-Roman.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/StyreneBLC-Regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/AnthropicSerif-Roman.woff2" as="font" type="font/woff2" crossorigin>
@@ -31,13 +31,19 @@
           <div class="brand-sub">Спред-арбитраж на срочном рынке</div>
         </div>
       </div>
-      <div id="theme-switch" class="theme-switch" role="group" aria-label="Тема оформления">
-        <button type="button" data-theme-val="claude" title="Тёмная тема в стиле чата Claude">
-          <span class="swatch claude" aria-hidden="true"></span>Claude
+      <div id="theme-switch" class="theme-switch">
+        <button type="button" class="theme-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-menu" title="Тема оформления" aria-label="Тема оформления">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 1.8a6.2 6.2 0 0 1 0 12.4z" fill="currentColor" stroke="none"/></svg>
         </button>
-        <button type="button" data-theme-val="classic" title="Исходная классическая тема">
-          <span class="swatch classic" aria-hidden="true"></span>Классика
-        </button>
+        <div id="theme-menu" class="theme-menu" role="menu" aria-label="Тема оформления">
+          <div class="theme-menu-title" aria-hidden="true">Тема</div>
+          <button type="button" role="menuitemradio" data-theme-val="claude" title="Тёмная тема в стиле чата Claude">
+            <span class="swatch claude" aria-hidden="true"></span>Claude<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>
+          </button>
+          <button type="button" role="menuitemradio" data-theme-val="classic" title="Исходная классическая тема">
+            <span class="swatch classic" aria-hidden="true"></span>Классика<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>
+          </button>
+        </div>
       </div>
     </div>
     <nav id="strategies" class="strategies" aria-label="Стратегии"></nav>

@@ -18,8 +18,20 @@
     themeBox.querySelectorAll('button[data-theme-val]').forEach((btn) => {
       const active = btn.dataset.themeVal === cur;
       btn.classList.toggle('on', active);
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      btn.setAttribute('aria-checked', active ? 'true' : 'false');
     });
+  }
+
+  const themeTrigger = themeBox && themeBox.querySelector('.theme-trigger');
+
+  function setMenuOpen(open, focusItem) {
+    if (!themeBox) return;
+    themeBox.classList.toggle('open', open);
+    if (themeTrigger) themeTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && focusItem) {
+      const item = themeBox.querySelector('button[data-theme-val].on') || themeBox.querySelector('button[data-theme-val]');
+      if (item) item.focus();
+    }
   }
 
   function setTheme(next) {
@@ -35,9 +47,33 @@
   if (themeBox) {
     syncThemeButtons();
     themeBox.addEventListener('click', (e) => {
+      if (themeTrigger && themeTrigger.contains(e.target)) {
+        setMenuOpen(!themeBox.classList.contains('open'), e.detail === 0);
+        return;
+      }
       const btn = e.target.closest && e.target.closest('button[data-theme-val]');
       if (!btn) return;
+      setMenuOpen(false);
       setTheme(btn.dataset.themeVal);
+      if (themeTrigger) themeTrigger.focus();
+    });
+    document.addEventListener('click', (e) => {
+      if (themeBox.classList.contains('open') && !themeBox.contains(e.target)) setMenuOpen(false);
+    });
+    themeBox.addEventListener('keydown', (e) => {
+      if (!themeBox.classList.contains('open')) return;
+      const items = Array.from(themeBox.querySelectorAll('button[data-theme-val]'));
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMenuOpen(false);
+        if (themeTrigger) themeTrigger.focus();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const d = e.key === 'ArrowDown' ? 1 : -1;
+        const next = items[(i + d + items.length) % items.length] || items[0];
+        next.focus();
+      }
     });
   }
 
