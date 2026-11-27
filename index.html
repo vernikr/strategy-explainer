@@ -4,7 +4,21 @@
   <meta charset="utf-8">
   <title>Стратегии простыми словами</title>
   <meta name="viewport" content="width=1536">
+  <link rel="preload" href="fonts/AnthropicInterface-Roman.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/StyreneBLC-Regular.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/AnthropicSerif-Roman.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/styles.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('se-theme');
+        document.documentElement.setAttribute('data-theme', t === 'classic' ? 'classic' : 'claude');
+      } catch (_) {
+        document.documentElement.setAttribute('data-theme', 'claude');
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="top">

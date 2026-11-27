@@ -1,0 +1,123 @@
+/* Фирменные шрифты Claude / Anthropic (локальные WOFF2):
+   1) Anthropic Interface & Anthropic Sans (Variable 300–800, opsz 12–48, GRAD) — интерфейс и латиница/формулы
+   2) Styrene B LC (Regular 400, Medium 500–600) — официальная кириллическая гарнитура бренда Anthropic/Claude
+   3) Anthropic Serif & Tiempos Text — фирменная антиква ответов и заголовков Claude
+   4) Anthropic Mono — фирменный моноширинный шрифт блоков кода и формул Claude */
+
+@font-face {
+  font-family: "anthropic-sans";
+  src: url("../fonts/AnthropicInterface-Roman.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+  font-feature-settings: "dlig" 0, "pnum" 1;
+}
+
+@font-face {
+  font-family: "anthropic-sans";
+  src: url("../fonts/AnthropicSans-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+  font-feature-settings: "dlig" 0;
+}
+
+@font-face {
+  font-family: "anthropic-sans-display";
+  src: url("../fonts/AnthropicSans-Display.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+  font-feature-settings: "dlig" 0, "ss01" 1, "ss02" 1;
+}
+
+@font-face {
+  font-family: "anthropic-sans-display";
+  src: url("../fonts/AnthropicSans-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+  font-feature-settings: "dlig" 0;
+}
+
+@font-face {
+  font-family: "Styrene B LC";
+  src: url("../fonts/StyreneBLC-Regular.woff2") format("woff2");
+  font-weight: 300 450;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Styrene B LC";
+  src: url("../fonts/StyreneBLC-Medium.woff2") format("woff2");
+  font-weight: 451 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "anthropic-serif";
+  src: url("../fonts/AnthropicSerif-Roman.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "anthropic-serif";
+  src: url("../fonts/AnthropicSerif-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Tiempos Text";
+  src: url("../fonts/TiemposText-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Tiempos Text";
+  src: url("../fonts/TiemposText-Medium.woff2") format("woff2");
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Anthropic Serif Fallback Georgia";
+  src: local("Georgia"), local("PT Serif"), local("Charter");
+  size-adjust: 104.79%;
+  ascent-override: 94.71%;
+  descent-override: 24.57%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: "Anthropic Serif Fallback Noto";
+  src: local("Noto Serif"), local("NotoSerif"), local("NotoSerif-Regular");
+  size-adjust: 97.12%;
+  ascent-override: 102.19%;
+  descent-override: 26.51%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: "anthropic-mono";
+  src: url("../fonts/AnthropicMono-Roman.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "anthropic-mono";
+  src: url("../fonts/AnthropicMono-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
