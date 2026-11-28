@@ -7,6 +7,7 @@ window.STRATEGY_TIERS = [
 ];
 
 window.STRATEGIES = [
+  { id: 'spreads', tier: 1, name: 'Карта спредов', badge: 'старт', ready: true },
   { id: 'zscore', tier: 1, name: 'Z-score', badge: 'база', ready: true },
   { id: 'ewma', tier: 1, name: 'EWMA', ready: true },
   { id: 'robust', tier: 1, name: 'Робастный z', ready: true },
